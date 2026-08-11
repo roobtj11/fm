@@ -85,6 +85,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                 { name: 'Substats', path: '/calculators/substats', icon: Sliders },
                 { name: 'Loadout Optimizer', path: '/calculators/loadout', icon: Trophy },
                 { name: 'Swap Test', path: '/calculators/swap-test', icon: ArrowRightLeft },
+                { name: 'Stepping Stones', path: '/calculators/stepping-stones', icon: Target },
             ]
         },
         {
