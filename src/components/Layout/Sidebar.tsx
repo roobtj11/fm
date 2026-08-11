@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-toastify';
@@ -6,7 +6,7 @@ import { cn } from '../../lib/utils';
 import {
     Star, Egg, Key, Shirt, Cat, Image, ChevronDown,
     Cpu, Swords, Shield, Lock, Coins, Palette, FileJson, HelpCircle, Github, TrendingUp, Hammer, Coffee, Zap, ShoppingCart, Target, Sliders,
-    Trash2, Check, Copy, Trophy
+    Trash2, Check, Copy, Trophy, ArrowRightLeft
 } from 'lucide-react';
 import { GameIcon } from '../UI/GameIcon';
 import { useProfile } from '../../context/ProfileContext';
@@ -41,40 +41,10 @@ const isRecommended = (path: string) => {
     return false;
 };
 
-const CoffeeFountain = () => {
-    return (
-        <div className="absolute inset-0 pointer-events-none overflow-visible">
-            {Array.from({ length: 6 }).map((_, i) => (
-                <motion.span
-                    key={i}
-                    initial={{ opacity: 0, scale: 0.5, x: 0, y: 0 }}
-                    animate={{
-                        opacity: [0, 1, 1, 0],
-                        scale: [0.5, 1.2, 0.8],
-                        x: (i % 2 === 0 ? 1 : -1) * (Math.random() * 40 + 20),
-                        y: -(Math.random() * 100 + 50),
-                        rotate: Math.random() * 360
-                    }}
-                    transition={{
-                        duration: 1.2,
-                        repeat: Infinity,
-                        delay: i * 0.2,
-                        ease: "easeOut"
-                    }}
-                    className="absolute left-1/2 top-1/2 text-lg"
-                >
-                    {i % 2 === 0 ? '☕' : '❤️'}
-                </motion.span>
-            ))}
-        </div>
-    );
-};
-
 export function Sidebar({ isOpen, onClose }: SidebarProps) {
     const location = useLocation();
     const { profile, profiles, activeProfileId, switchProfile, createProfile, cloneProfile, deleteProfile } = useProfile();
     const { selectedVersion } = useGameDataContext();
-    const [isHoveringCoffee, setIsHoveringCoffee] = useState(false);
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({
         'Calculators': true,
@@ -87,26 +57,6 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             [title]: !prev[title]
         }));
     };
-
-    const donationLabel = useMemo(() => {
-        const labels = [
-            "Keep Dev Awake ☕", "Forge Fuel 🔥", "Buy Coffee ☕", "Dev Juice 🥤",
-            "Hammer Lube 🔨", "Caffeine Boost ⚡", "Fuel the Dev 🚀", "Tips & Treats 🍬",
-            "Mythic Espresso ☕", "Ultimate Latte 🥛", "Forge Coal 🔥",
-            "Mana Potion 🧪", "Dev Energy ⚡", "Forge Master Tab 🍺",
-            "Coffee Blessing ✨", "Support Craft 🔨", "Binary Beans 🫘",
-            "Hot Dev Liquid ☕", "Pixel Caffeine 👾", "Legendary Brew 🍺",
-            "Anti-Sleep Serum 🧪", "Code Cruncher Fuel 🍪", "Server Hamster Snacks 🐹",
-            "Bug Repellent Fund 🦟", "Infinite Loop Coffee ♾️", "Overclock the Dev ⚡",
-            "Dark Mode Power 🌙", "Keyboard Grease ⌨️", "RNG Luck Booster 🍀",
-            "Divine Drop Rate Up 💎", "Pet Food for Dev 🍕", "Mount Stable Fund 🐎",
-            "Tech Tree Fertilizer 🌱", "XP Boost for Dev 📈", "Sleep is for the Weak 💤",
-            "Donation Crit Hit! 🎯", "Anvil Overheat 🌡️", "Magic Brew 🧙",
-            "Supporter Aura ✨", "Godly Grind Fuel ⚡", "Bring back advanced chat 💬",
-            "Bring Back Hex Colors 🎨"
-        ];
-        return labels[Math.floor(Math.random() * labels.length)];
-    }, []);
 
     const NAV_GROUPS = [
         {
@@ -134,6 +84,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                 { name: 'War Prizes', path: '/calculators/war-prizes', icon: Trophy },
                 { name: 'Substats', path: '/calculators/substats', icon: Sliders },
                 { name: 'Loadout Optimizer', path: '/calculators/loadout', icon: Trophy },
+                { name: 'Swap Test', path: '/calculators/swap-test', icon: ArrowRightLeft },
             ]
         },
         {
@@ -352,7 +303,6 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                                                 const recommended = isRecommended(item.path);
 
                                                 if ('external' in item && item.external) {
-                                                    const isCoffee = item.name.toLowerCase().includes('awake');
                                                     const themeInfo = getThemeInfo((item as any).theme);
                                                     return (
                                                         <a
@@ -360,46 +310,24 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                                                             href={item.path}
                                                             target="_blank"
                                                             rel="noopener noreferrer"
-                                                            onMouseEnter={() => isCoffee && setIsHoveringCoffee(true)}
-                                                            onMouseLeave={() => isCoffee && setIsHoveringCoffee(false)}
-                                                            onClick={() => {
-                                                                if (isCoffee) {
-                                                                    if ((window as any).__triggerTestToast) {
-                                                                        (window as any).__triggerTestToast();
-                                                                    }
-                                                                }
-                                                                onClose();
-                                                            }}
+                                                            onClick={onClose}
                                                             className={cn(
-                                                                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 relative group/coffee overflow-visible",
-                                                                isCoffee
-                                                                    ? "coffee-btn-animated"
-                                                                    : themeInfo ? "text-white" : "text-text-secondary hover:text-text-primary hover:bg-white/5"
+                                                                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 relative overflow-hidden",
+                                                                themeInfo ? "text-white" : "text-text-secondary hover:text-text-primary hover:bg-white/5"
                                                             )}
                                                         >
                                                             {themeInfo && (
                                                                 <div
                                                                     className={cn(themeInfo.className, "rounded-lg")}
                                                                     style={themeInfo.style as React.CSSProperties}
-                                                                >
-                                                                    {themeInfo.className === 'quantum-animation' && (
-                                                                        <>
-                                                                            <span></span><span></span><span></span><span></span>
-                                                                            <span></span><span></span><span></span><span></span>
-                                                                            <span></span><span></span><span></span><span></span>
-                                                                            <span></span><span></span><span></span><span></span><span></span><span></span>
-                                                                        </>
-                                                                    )}
-                                                                </div>
+                                                                />
                                                             )}
-                                                            {isCoffee && isHoveringCoffee && <CoffeeFountain />}
                                                             {Icon && <Icon size={18} className={cn(
                                                                 "transition-transform relative z-10 text-white",
-                                                                (themeInfo || isCoffee) ? "icon-stroke-sm" : "",
-                                                                isCoffee && "group-hover/coffee:rotate-12"
+                                                                themeInfo ? "icon-stroke-sm" : ""
                                                             )} />}
-                                                            <span className={cn("relative z-10 font-bold", themeInfo || isCoffee ? "text-stroke-sm" : "")}>
-                                                                {isCoffee ? donationLabel : item.name}
+                                                            <span className={cn("relative z-10 font-bold", themeInfo ? "text-stroke-sm" : "")}>
+                                                                {item.name}
                                                             </span>
                                                         </a>
                                                     );
@@ -464,31 +392,6 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
 
                 {/* Footer */}
                 <div className="p-4 border-t border-border space-y-4">
-                    <a
-                        href="https://www.buymeacoffee.com/1vcian"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onMouseEnter={() => setIsHoveringCoffee(true)}
-                        onMouseLeave={() => setIsHoveringCoffee(false)}
-                        onClick={() => {
-                            if ((window as any).__triggerTestToast) {
-                                (window as any).__triggerTestToast();
-                            }
-                            onClose();
-                        }}
-                        className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 relative group/coffee overflow-visible coffee-btn-animated shadow-lg hover:shadow-accent-primary/20 hover:-translate-y-0.5"
-                    >
-                        <div
-                            className="divine-animation rounded-xl"
-                            style={{ '--theme-url': `url(${import.meta.env.BASE_URL}Texture2D/${selectedVersion ? `${selectedVersion}/` : ''}DivineBackground.png)` } as React.CSSProperties}
-                        />
-                        {isHoveringCoffee && <CoffeeFountain />}
-                        <Coffee size={18} className="transition-transform relative z-10 text-white icon-stroke-sm group-hover/coffee:rotate-12" />
-                        <span className="relative z-10 text-stroke-sm text-white">
-                            {donationLabel}
-                        </span>
-                    </a>
-
                     <div className="text-[10px] text-text-muted text-center uppercase tracking-widest font-medium opacity-60">
                         v2.2.0 • by <a href="https://1vcian.me" target="_blank" rel="noopener noreferrer" className="hover:text-accent-primary transition-colors font-bold">1vcian</a>
                     </div>
