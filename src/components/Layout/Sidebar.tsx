@@ -63,6 +63,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             title: 'Profile',
             items: [
                 { name: 'My Profile', path: '/', isProfile: true },
+                { name: 'Cloud Backup', path: '/account', icon: Shield },
                 { name: 'Progress Prediction', path: '/progress-prediction', icon: TrendingUp },
                 { name: 'Mission Calculator', path: '/solo-mission', icon: Target },
                 { name: 'PVP Simulator', path: '/pvp-arena', icon: Swords },
