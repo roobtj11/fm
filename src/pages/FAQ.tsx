@@ -4,16 +4,16 @@ import { HelpCircle, Heart, Zap, Coffee, Globe, ExternalLink, MessageCircle, Sta
 import contributorsStats from '../data/contributors_stats.json';
 
 type ContributorStats = {
-    name?: string;
-    email?: string;
-    login?: string;
+    name?: string | null;
+    email?: string | null;
+    login?: string | null;
     additions?: number;
     deletions?: number;
     commits?: number;
 };
 
 const localContributorStats = contributorsStats as ContributorStats[];
-const normalizeContributorName = (value?: string) => value?.trim().toLowerCase() ?? '';
+const normalizeContributorName = (value?: string | null) => value?.trim().toLowerCase() ?? '';
 
 export default function FAQ() {
     const [supporters, setSupporters] = useState<any[]>([]);
