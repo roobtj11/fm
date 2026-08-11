@@ -3,8 +3,8 @@ import {
     AlertTriangle,
     CheckCircle2,
     Cloud,
-    CloudDownload,
-    CloudUpload,
+    Download,
+    Upload,
     Copy,
     ExternalLink,
     LogOut,
@@ -351,7 +351,7 @@ export default function CloudAccount() {
                                 onClick={() => void push()}
                                 className="flex min-h-36 flex-col items-start justify-between rounded-xl border-2 border-cyan-700 bg-cyan-950/30 p-4 text-left transition hover:border-cyan-400 disabled:opacity-50"
                             >
-                                <CloudUpload className="h-7 w-7 text-cyan-300" />
+                                <Upload className="h-7 w-7 text-cyan-300" />
                                 <div>
                                     <div className="font-bold text-white">Back up this device</div>
                                     <div className="mt-1 text-sm text-slate-400">Upload all current local profiles to your account.</div>
@@ -363,7 +363,7 @@ export default function CloudAccount() {
                                 onClick={() => void pull()}
                                 className="flex min-h-36 flex-col items-start justify-between rounded-xl border-2 border-violet-800 bg-violet-950/25 p-4 text-left transition hover:border-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
                             >
-                                <CloudDownload className="h-7 w-7 text-violet-300" />
+                                <Download className="h-7 w-7 text-violet-300" />
                                 <div>
                                     <div className="font-bold text-white">Restore cloud backup</div>
                                     <div className="mt-1 text-sm text-slate-400">
