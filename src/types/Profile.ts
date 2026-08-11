@@ -55,6 +55,30 @@ export interface SkillSlot {
     ascensionLevel?: number;
 }
 
+export type SteppingStoneChoice = 'up' | 'down';
+export type SteppingStoneOutcome = 'safe' | 'fall';
+
+export interface SteppingStoneEntry {
+    id: string;
+    stone: number;
+    choice: SteppingStoneChoice;
+    outcome: SteppingStoneOutcome;
+    recordedAt: string;
+}
+
+export interface SteppingStoneAttempt {
+    id: string;
+    startedAt: string;
+    finishedAt?: string;
+    entries: SteppingStoneEntry[];
+}
+
+export interface SteppingStonesTracker {
+    attempts: SteppingStoneAttempt[];
+    currentAttemptId?: string;
+    targetStones: number;
+}
+
 export interface UserProfile {
     id: string; // Unique identifier for the profile
     name: string;
@@ -151,6 +175,8 @@ export interface UserProfile {
         plannerMinWaitBetweenNodes?: number;
         techPlanMetadata?: { isAuto: boolean; config?: any };
         useSkinWindup?: boolean;
+        steppingStones?: SteppingStonesTracker;
+        lastManualBackupAt?: string;
     };
 }
 
@@ -232,6 +258,7 @@ export const INITIAL_PROFILE: UserProfile = {
         plannerMaxWait: 120,
         plannerMinWaitBetweenNodes: 1,
         techPlanMetadata: { isAuto: false },
-        useSkinWindup: true
+        useSkinWindup: true,
+        steppingStones: { attempts: [], targetStones: 10 }
     }
 };
