@@ -5,7 +5,7 @@ import { toast } from 'react-toastify';
 import { cn } from '../../lib/utils';
 import {
     Star, Egg, Key, Shirt, Cat, Image, ChevronDown,
-    Cpu, Swords, Shield, Lock, Coins, Palette, FileJson, HelpCircle, Github, TrendingUp, Hammer, Coffee, Zap, ShoppingCart, Target, Sliders,
+    Cpu, Swords, Shield, Lock, Coins, Palette, FileJson, HelpCircle, Github, TrendingUp, Hammer, Zap, ShoppingCart, Target, Sliders,
     Trash2, Check, Copy, Trophy, ArrowRightLeft
 } from 'lucide-react';
 import { GameIcon } from '../UI/GameIcon';
