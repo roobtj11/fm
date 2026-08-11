@@ -1,28 +1,56 @@
-name: Deploy to GitHub Pages
+name: Deploy branch preview
 
 on:
   push:
     branches:
-      - main
+      - codex/build-optimizer-rework
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout preview branch
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install and Build
-        run: |
-          npm install
-          npm run build
-
-      - name: Deploy
-        uses: JamesIves/github-pages-deploy-action@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          folder: dist
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Forge Master
+        run: npm run build
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy preview
+        id: deployment
+        uses: actions/deploy-pages@v4
