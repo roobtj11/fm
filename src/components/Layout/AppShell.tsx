@@ -96,43 +96,6 @@ export default function AppShell() {
     }, [profile.misc.forgeLevel]);
 
     useEffect(() => {
-        // Track visit frequency
-        const visitCount = parseInt(localStorage.getItem('fm_visit_count') || '0') + 1;
-        localStorage.setItem('fm_visit_count', visitCount.toString());
-
-        const lastToastTime = parseInt(localStorage.getItem('fm_last_toast_time') || '0');
-        const now = Date.now();
-        const oneHour = 60 * 60 * 1000;
-
-        const userName = profile.name || 'Forge Master';
-        const messages = FRIENDLY_MESSAGES(userName, !!profile.name);
-
-        // Show toast if frequent visitor (every 3rd session/refresh) and it's been an hour
-        if (visitCount > 1 && visitCount % 3 === 0 && (now - lastToastTime) > oneHour) {
-            const randomMsg = messages[Math.floor(Math.random() * messages.length)];
-
-            setTimeout(() => {
-                toast(
-                    <div className="flex flex-col gap-0.5 select-none">
-                        <div className="font-black text-[10px] uppercase tracking-widest text-[#FFDD00] flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-[#FFDD00] animate-pulse" />
-                            Support the Forge
-                        </div>
-                        <div className="font-bold text-sm leading-tight text-white">
-                            {randomMsg}
-                        </div>
-                        <div className="text-[9px] mt-1 font-black uppercase text-white/40 flex items-center gap-1">
-                            Click to support the developer <span className="animate-bounce text-xs">☕❤️</span>
-                        </div>
-                    </div>,
-                    {
-                        icon: <div className="text-xl">🛠️</div>,
-                        autoClose: 10000,
-                        position: "bottom-left",
-                        onClick: () => window.open('https://www.buymeacoffee.com/1vcian', '_blank'),
-                        className: "!bg-bg-secondary/90 !backdrop-blur-md !text-white border border-[#FFDD00]/30 shadow-[0_8px_32px_rgba(0,0,0,0.5)] cursor-pointer hover:border-[#FFDD00]/60 transition-all font-sans rounded-2xl",
-                        progressClassName: "!bg-[#FFDD00]
-    useEffect(() => {
         (window as any).__triggerUpdateModal = () => {
             const latest = versions[0] || "2026_07_03_12_39";
             setPopupVersion(latest);
