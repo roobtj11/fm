@@ -78,6 +78,7 @@ interface ProfileContextType {
     deleteProfile: (profileId: string) => void;
     renameProfile: (name: string) => boolean; // Returns false if name already exists
     setProfileIcon: (iconIndex: number) => void;
+    replaceAllProfiles: (profiles: UserProfile[], activeProfileId?: string) => void;
 
     // Save/Export/Import
     saveProfile: () => void;
@@ -355,6 +356,28 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
     }, [profiles]);
 
+    const replaceAllProfiles = useCallback((incomingProfiles: UserProfile[], requestedActiveId?: string) => {
+        const migrated = incomingProfiles.map((incoming) => sanitizeProfile({
+            ...INITIAL_PROFILE,
+            ...incoming,
+            id: incoming.id || generateProfileId(),
+            iconIndex: incoming.iconIndex ?? 0,
+            isShared: undefined,
+        }));
+
+        if (migrated.length === 0) {
+            throw new Error('Cloud backup did not contain any profiles.');
+        }
+
+        const nextActiveId = requestedActiveId && migrated.some(item => item.id === requestedActiveId)
+            ? requestedActiveId
+            : migrated[0].id;
+
+        setImportedProfile(null);
+        setState({ profiles: migrated, activeId: nextActiveId });
+        saveAllProfiles(migrated, nextActiveId);
+    }, [saveAllProfiles]);
+
     const renameProfile = useCallback((name: string): boolean => {
         if (isNameTaken(name, activeProfileId)) {
             return false;
@@ -561,6 +584,7 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
         deleteProfile,
         renameProfile,
         setProfileIcon,
+        replaceAllProfiles,
         saveProfile,
         resetProfile,
         exportProfile,
@@ -573,7 +597,7 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }), [
         profile, updateProfile, updateNestedProfile, profiles, importedProfile,
         activeProfileId, switchProfile, createProfile, cloneProfile, deleteProfile,
-        renameProfile, setProfileIcon, saveProfile, resetProfile, exportProfile,
+        renameProfile, setProfileIcon, replaceAllProfiles, saveProfile, resetProfile, exportProfile,
         importProfile, importProfileFromJsonString, saveSharedProfile, getTechLevel,
         getDungeonLevel, isNameTaken
     ]);
