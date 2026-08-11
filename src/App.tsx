@@ -1,6 +1,7 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { GameDataProvider } from './context/GameDataContext';
 import { ProfileProvider } from './context/ProfileContext';
+import { CloudSyncProvider } from './context/CloudSyncContext';
 import { TreeModeProvider } from './context/TreeModeContext';
 import { ComparisonProvider } from './context/ComparisonContext';
 import { ToastContainer } from 'react-toastify';
@@ -24,6 +25,7 @@ import Colors from './pages/Colors';
 import Emblems from './pages/Emblems';
 import FAQ from './pages/FAQ';
 import Profile from './pages/Profile';
+import CloudAccount from './pages/CloudAccount';
 import ProgressPrediction from './pages/ProgressPrediction';
 import PvpArena from './pages/PvpArena';
 import SubstatsCalculator from './pages/Calculators/SubstatsCalculator';
@@ -52,12 +54,14 @@ function App() {
     return (
         <GameDataProvider>
             <ProfileProvider>
+                <CloudSyncProvider>
                 <ComparisonProvider>
                     <TreeModeProvider>
                         <HashRouter>
                             <Routes>
                                 <Route path="/" element={<AppShell />}>
                                     <Route index element={<Profile />} />
+                                    <Route path="account" element={<CloudAccount />} />
                                     <Route path="progress-prediction" element={<ProgressPrediction />} />
                                     <Route path="home" element={<Home />} />
                                     <Route path="configs" element={<Configs />} />
@@ -104,6 +108,7 @@ function App() {
                         </HashRouter>
                     </TreeModeProvider>
                 </ComparisonProvider>
+                </CloudSyncProvider>
             </ProfileProvider>
             <ToastContainer
                 position="top-center"
