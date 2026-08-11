@@ -51,6 +51,11 @@ export function useProfileOptimizer() {
         ascensionConfigsLibrary
     };
 
+    /** Calculate the complete character result for any profile snapshot. */
+    const calculateProfileStats = useCallback((base: UserProfile = profile) => {
+        return new StatEngine(base, libs).calculate();
+    }, [profile, libs]);
+
     // respectSavedLevels: when true (default), each saved build is scored at its own
     // stored level — the original behavior. When false, every candidate is scored at
     // level 1 so only secondary stats decide. Either way the returned build keeps its
@@ -219,6 +224,7 @@ export function useProfileOptimizer() {
     return {
         optimizeLoadout,
         optimizeSkills,
+        calculateProfileStats,
         isReady: !!petLibrary && !!skillLibrary && !!mountUpgradeLibrary && !!itemBalancingConfig
     };
 }
