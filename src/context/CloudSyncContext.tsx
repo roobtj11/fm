@@ -128,8 +128,10 @@ export function CloudSyncProvider({ children }: { children: ReactNode }) {
         const saved = readJson<CloudConfig>(CONFIG_KEY);
         if (saved?.url && saved?.anonKey) return saved;
 
-        const envUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-        const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+        const envUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)
+            || 'https://efyeyutyurbdukafdgai.supabase.co';
+        const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)
+            || 'sb_publishable_gTzbFQ_xcf6uLIo3M8ofUQ_8QR7Y7O3';
         return envUrl && envKey ? { url: normalizeUrl(envUrl), anonKey: envKey } : null;
     });
     const [session, setSession] = useState<CloudSession | null>(() => readJson<CloudSession>(SESSION_KEY));
