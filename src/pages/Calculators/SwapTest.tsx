@@ -78,8 +78,12 @@ function choose(n: number, k: number) {
 function searchSize(profile: UserProfile) {
     const petCount = profile.pets.savedBuilds?.length || 0;
     const petSets = petCount === 0 ? 1 : choose(petCount, Math.min(petCount, MAX_ACTIVE_PETS));
-    const mountCount = Math.max(1, (profile.mount.savedBuilds?.length || 0) + (profile.mount.active ? 1 : 0));
-    return petSets * mountCount;
+    const mountKeys = new Set(
+        [...(profile.mount.savedBuilds || []), profile.mount.active]
+            .filter((mount): mount is MountSlot => !!mount)
+            .map(mount => `${mount.id}|${mount.rarity}|${mount.level}|${JSON.stringify(mount.secondaryStats)}`)
+    );
+    return petSets * Math.max(1, mountKeys.size);
 }
 
 function farmKillsPerMinute(stats: AggregatedStats, enemyHealth: number, overheadSeconds: number) {
@@ -132,11 +136,14 @@ export default function SwapTest() {
     const petName = (pet: PetSlot) => {
         const key = `{'Rarity': '${pet.rarity}', 'Id': ${pet.id}}`;
         const type = petLibrary?.[key]?.Type || `Pet #${pet.id}`;
-        return pet.customName || `${type} - ${describeSubstats(pet.secondaryStats)} - ${pet.rarity}`;
+        const baseName = pet.customName?.split(' - ')[0]?.trim() || type;
+        return `${baseName} - ${describeSubstats(pet.secondaryStats)} - ${pet.rarity}`;
     };
 
-    const mountName = (mount: MountSlot) =>
-        mount.customName || `Mount #${mount.id} - ${describeSubstats(mount.secondaryStats)} - ${mount.rarity}`;
+    const mountName = (mount: MountSlot) => {
+        const baseName = mount.customName?.split(' - ')[0]?.trim() || `Mount #${mount.id}`;
+        return `${baseName} - ${describeSubstats(mount.secondaryStats)} - ${mount.rarity}`;
+    };
 
     const equippedPetIds = useMemo(
         () => new Set(profile.pets.active.map(p => p.instanceId).filter(Boolean)),
