@@ -15,6 +15,8 @@ export interface ItemSlot {
 }
 
 export interface PetSlot {
+    /** Stable inventory identity so duplicate copies of the same pet stay distinct. */
+    instanceId?: string;
     rarity: string;
     id: number;
     level: number;
@@ -29,6 +31,8 @@ export interface PetSlot {
 }
 
 export interface MountSlot {
+    /** Stable inventory identity so duplicate copies of the same mount stay distinct. */
+    instanceId?: string;
     rarity: string;
     id: number;
     level: number;
