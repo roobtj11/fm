@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
     ArrowDown,
     ArrowUp,
     BarChart3,
-    CloudOff,
+    Cloud,
     Download,
     Play,
     RotateCcw,
@@ -580,15 +581,19 @@ export default function SteppingStonesTracker() {
                         Last manual backup: {formatDate(profile.misc.lastManualBackupAt)}
                     </p>
 
-                    <div className="mt-5 flex gap-3 rounded-xl border border-slate-700 bg-slate-950/60 p-4">
-                        <CloudOff className="mt-0.5 h-5 w-5 shrink-0 text-slate-400" />
+                    <div className="mt-5 flex gap-3 rounded-xl border border-cyan-800/70 bg-cyan-950/25 p-4">
+                        <Cloud className="mt-0.5 h-5 w-5 shrink-0 text-cyan-300" />
                         <div>
-                            <p className="font-semibold text-slate-200">Cloud sign-in is not configured yet</p>
-                            <p className="mt-1 text-sm leading-6 text-slate-400">
-                                Clearing site data, changing browser profiles, or moving to another device can
-                                remove local saves. Real sign-in and cross-device sync require a hosted account
-                                and database service; this app does not pretend a local password is cloud backup.
+                            <p className="font-semibold text-cyan-100">Cloud account backup is available</p>
+                            <p className="mt-1 text-sm leading-6 text-cyan-100/70">
+                                Sign in to back up all profiles and restore them on another device.
                             </p>
+                            <Link
+                                to="/account"
+                                className="mt-3 inline-flex rounded-lg border border-cyan-700 px-3 py-2 text-sm font-semibold text-cyan-200 hover:bg-cyan-900/40"
+                            >
+                                Open Cloud Backup
+                            </Link>
                         </div>
                     </div>
                 </section>
