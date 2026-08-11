@@ -98,8 +98,10 @@ export function useProfileOptimizer() {
             seen.add(key);
             mountCandidates.push(m);
         };
-        addMount(base.mount.active);
+        // Prefer saved inventory records so custom names and unique instance IDs
+        // survive into optimizer recommendations; add the active mount as a fallback.
         (base.mount.savedBuilds || []).forEach(addMount);
+        addMount(base.mount.active);
         // If there are no mounts at all, keep the current mount (no change).
         if (mountCandidates.length === 0) mountCandidates.push(base.mount.active);
 
