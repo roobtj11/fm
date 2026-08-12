@@ -1,6 +1,7 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { GameDataProvider } from './context/GameDataContext';
 import { ProfileProvider } from './context/ProfileContext';
+import { CloudSyncProvider } from './context/CloudSyncContext';
 import { TreeModeProvider } from './context/TreeModeContext';
 import { ComparisonProvider } from './context/ComparisonContext';
 import { ToastContainer } from 'react-toastify';
@@ -24,6 +25,7 @@ import Colors from './pages/Colors';
 import Emblems from './pages/Emblems';
 import FAQ from './pages/FAQ';
 import Profile from './pages/Profile';
+import CloudAccount from './pages/CloudAccount';
 import ProgressPrediction from './pages/ProgressPrediction';
 import PvpArena from './pages/PvpArena';
 import SubstatsCalculator from './pages/Calculators/SubstatsCalculator';
@@ -33,6 +35,8 @@ import SkillCalculator from './pages/Calculators/SkillCalculator';
 import TreeCalculator from './pages/Calculators/TreeCalculator';
 import WarPrizesCalculator from './pages/Calculators/WarPrizesCalculator';
 import LoadoutOptimizer from './pages/Calculators/LoadoutOptimizer';
+import SwapTest from './pages/Calculators/SwapTest';
+import SteppingStonesTracker from './pages/Calculators/SteppingStonesTracker';
 import Verify from './pages/Verify';
 import ForgeWiki from './pages/ForgeWiki';
 import SkinsPage from './pages/Skins';
@@ -50,12 +54,14 @@ function App() {
     return (
         <GameDataProvider>
             <ProfileProvider>
+                <CloudSyncProvider>
                 <ComparisonProvider>
                     <TreeModeProvider>
                         <HashRouter>
                             <Routes>
                                 <Route path="/" element={<AppShell />}>
                                     <Route index element={<Profile />} />
+                                    <Route path="account" element={<CloudAccount />} />
                                     <Route path="progress-prediction" element={<ProgressPrediction />} />
                                     <Route path="home" element={<Home />} />
                                     <Route path="configs" element={<Configs />} />
@@ -85,6 +91,8 @@ function App() {
                                     <Route path="calculators/substats" element={<SubstatsCalculator />} />
                                     <Route path="calculators/war-prizes" element={<WarPrizesCalculator />} />
                                     <Route path="calculators/loadout" element={<LoadoutOptimizer />} />
+                                    <Route path="calculators/swap-test" element={<SwapTest />} />
+                                    <Route path="calculators/stepping-stones" element={<SteppingStonesTracker />} />
                                     <Route path="solo-mission" element={<MissionSolo />} />
                                     <Route path="wiki/forge" element={<ForgeWiki />} />
                                     <Route path="wiki/base-drops" element={<BaseDrops />} />
@@ -100,6 +108,7 @@ function App() {
                         </HashRouter>
                     </TreeModeProvider>
                 </ComparisonProvider>
+                </CloudSyncProvider>
             </ProfileProvider>
             <ToastContainer
                 position="top-center"

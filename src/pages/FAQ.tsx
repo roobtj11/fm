@@ -3,6 +3,18 @@ import { Card } from '../components/UI/Card';
 import { HelpCircle, Heart, Zap, Coffee, Globe, ExternalLink, MessageCircle, Star, Quote, Users, Github, PlusCircle, MinusCircle } from 'lucide-react';
 import contributorsStats from '../data/contributors_stats.json';
 
+type ContributorStats = {
+    name?: string | null;
+    email?: string | null;
+    login?: string | null;
+    additions?: number;
+    deletions?: number;
+    commits?: number;
+};
+
+const localContributorStats = contributorsStats as ContributorStats[];
+const normalizeContributorName = (value?: string | null) => value?.trim().toLowerCase() ?? '';
+
 export default function FAQ() {
     const [supporters, setSupporters] = useState<any[]>([]);
     const [contributors, setContributors] = useState<any[]>([]);
@@ -24,11 +36,13 @@ export default function FAQ() {
                 if (Array.isArray(data)) {
                     // Merge with local stats
                     const merged = data.map(gh => {
-                        const stats = contributorsStats.find(s => 
-                            (s.login && s.login.toLowerCase() === gh.login.toLowerCase()) ||
-                            s.name.toLowerCase() === gh.login.toLowerCase() ||
-                            gh.login.toLowerCase() === s.email?.split('@')[0].toLowerCase()
-                        );
+                        const githubLogin = normalizeContributorName(gh.login);
+                        const stats = localContributorStats.find(s => {
+                            const emailLogin = s.email ? s.email.split('@')[0] : undefined;
+                            return [s.login, s.name, emailLogin]
+                                .map(normalizeContributorName)
+                                .some(candidate => candidate !== '' && candidate === githubLogin);
+                        });
                         return { 
                             ...gh, 
                             additions: stats?.additions || 0,

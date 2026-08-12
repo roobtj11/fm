@@ -51,6 +51,11 @@ export function useProfileOptimizer() {
         ascensionConfigsLibrary
     };
 
+    /** Calculate the complete character result for any profile snapshot. */
+    const calculateProfileStats = useCallback((base: UserProfile = profile) => {
+        return new StatEngine(base, libs).calculate();
+    }, [profile, libs]);
+
     // respectSavedLevels: when true (default), each saved build is scored at its own
     // stored level — the original behavior. When false, every candidate is scored at
     // level 1 so only secondary stats decide. Either way the returned build keeps its
@@ -93,8 +98,10 @@ export function useProfileOptimizer() {
             seen.add(key);
             mountCandidates.push(m);
         };
-        addMount(base.mount.active);
+        // Prefer saved inventory records so custom names and unique instance IDs
+        // survive into optimizer recommendations; add the active mount as a fallback.
         (base.mount.savedBuilds || []).forEach(addMount);
+        addMount(base.mount.active);
         // If there are no mounts at all, keep the current mount (no change).
         if (mountCandidates.length === 0) mountCandidates.push(base.mount.active);
 
@@ -219,6 +226,7 @@ export function useProfileOptimizer() {
     return {
         optimizeLoadout,
         optimizeSkills,
+        calculateProfileStats,
         isReady: !!petLibrary && !!skillLibrary && !!mountUpgradeLibrary && !!itemBalancingConfig
     };
 }

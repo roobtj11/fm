@@ -1,28 +1,40 @@
-name: Deploy to GitHub Pages
+name: Build branch preview
 
 on:
   push:
     branches:
-      - main
+      - codex/build-optimizer-rework
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: branch-preview
+  cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout preview branch
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install and Build
-        run: |
-          npm install
-          npm run build
-
-      - name: Deploy
-        uses: JamesIves/github-pages-deploy-action@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          folder: dist
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Forge Master
+        run: npm run build
+
+      - name: Package preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-master-preview
+          path: ./dist
+          if-no-files-found: error
