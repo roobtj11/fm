@@ -6,7 +6,7 @@ import { cn } from '../../lib/utils';
 import {
     Star, Egg, Key, Shirt, Cat, Image, ChevronDown,
     Cpu, Swords, Shield, Lock, Coins, Palette, FileJson, HelpCircle, Github, TrendingUp, Hammer, Zap, ShoppingCart, Target, Sliders,
-    Trash2, Check, Copy, Trophy, ArrowRightLeft
+    Trash2, Check, Copy, Trophy, ArrowRightLeft, LayoutDashboard, Pencil
 } from 'lucide-react';
 import { GameIcon } from '../UI/GameIcon';
 import { useProfile } from '../../context/ProfileContext';
@@ -62,7 +62,8 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
         {
             title: 'Profile',
             items: [
-                { name: 'My Profile', path: '/', isProfile: true },
+                { name: 'Overview', path: '/', icon: LayoutDashboard },
+                { name: 'Edit Profile', path: '/profile', icon: Pencil, isProfile: true },
                 { name: 'Account & Sync', path: '/account', icon: Shield },
                 { name: 'Progress Prediction', path: '/progress-prediction', icon: TrendingUp },
                 { name: 'Mission Calculator', path: '/solo-mission', icon: Target },

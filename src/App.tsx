@@ -25,6 +25,7 @@ import Colors from './pages/Colors';
 import Emblems from './pages/Emblems';
 import FAQ from './pages/FAQ';
 import Profile from './pages/Profile';
+import ProfileOverview from './pages/ProfileOverview';
 import CloudAccount from './pages/CloudAccount';
 import ProgressPrediction from './pages/ProgressPrediction';
 import PvpArena from './pages/PvpArena';
@@ -60,7 +61,8 @@ function App() {
                         <HashRouter>
                             <Routes>
                                 <Route path="/" element={<AppShell />}>
-                                    <Route index element={<Profile />} />
+                                    <Route index element={<ProfileOverview />} />
+                                    <Route path="profile" element={<Profile />} />
                                     <Route path="account" element={<CloudAccount />} />
                                     <Route path="progress-prediction" element={<ProgressPrediction />} />
                                     <Route path="home" element={<Home />} />
