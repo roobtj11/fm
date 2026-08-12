@@ -366,7 +366,7 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }));
 
         if (migrated.length === 0) {
-            throw new Error('Cloud backup did not contain any profiles.');
+            throw new Error('Your account did not contain any profiles.');
         }
 
         const nextActiveId = requestedActiveId && migrated.some(item => item.id === requestedActiveId)

@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import { sites } from './build/sites-vite-plugin'
+import hostingConfig from './.openai/hosting.json' with { type: 'json' }
 
 process.env.WRANGLER_WRITE_LOGS ??= 'false'
 process.env.WRANGLER_LOG_PATH ??= '.wrangler/logs'
@@ -20,6 +21,11 @@ export default defineConfig({
                 compatibility_date: '2026-05-22',
                 compatibility_flags: ['nodejs_compat'],
                 assets: { not_found_handling: 'single-page-application' },
+                d1_databases: hostingConfig.d1 ? [{
+                    binding: hostingConfig.d1,
+                    database_name: 'site-creator-d1',
+                    database_id: '00000000-0000-4000-8000-000000000000',
+                }] : [],
             },
         }),
     ],

@@ -690,15 +690,15 @@ export default function SteppingStonesTracker() {
                     <div className="mt-5 flex gap-3 rounded-xl border border-cyan-800/70 bg-cyan-950/25 p-4">
                         <Cloud className="mt-0.5 h-5 w-5 shrink-0 text-cyan-300" />
                         <div>
-                            <p className="font-semibold text-cyan-100">Cloud account backup is available</p>
+                            <p className="font-semibold text-cyan-100">Automatically saved to your account</p>
                             <p className="mt-1 text-sm leading-6 text-cyan-100/70">
-                                Sign in to back up all profiles and restore them on another device.
+                                ForgeMaster keeps every profile in sync with your Sites account—no backup or restore buttons needed.
                             </p>
                             <Link
                                 to="/account"
                                 className="mt-3 inline-flex rounded-lg border border-cyan-700 px-3 py-2 text-sm font-semibold text-cyan-200 hover:bg-cyan-900/40"
                             >
-                                Open Cloud Backup
+                                View Account &amp; Sync
                             </Link>
                         </div>
                     </div>

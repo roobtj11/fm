@@ -12,18 +12,11 @@ A comprehensive, **100% Fanmade** toolkit and encyclopedia for Forge Master play
 
 ---
 
-## Cloud profile sync
+## Account profile sync
 
-The fork includes optional email/password accounts and cross-device profile backup.
+The Sites version automatically saves profiles to the user's signed-in Sites account. There is no separate ForgeMaster password and there are no backup or restore buttons. On first use, the current device profiles initialize the account; after that, the account copy loads automatically on every device.
 
-1. Create a Supabase project.
-2. Run [`supabase/schema.sql`](./supabase/schema.sql) once in the Supabase SQL editor.
-3. Open **Cloud Backup** in Forge Master and enter the project URL and public publishable/anon key.
-4. Create an account or sign in, then choose **Back up this device** or **Restore cloud backup**.
-
-Local autosave remains enabled at all times. Signing in never overwrites a device automatically; the first sync direction is always an explicit choice. After that first successful backup or restore, profile changes sync in the background.
-
-For a preconfigured deployment, copy `.env.example` to `.env.local` and fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Never place the Supabase service-role key in this browser app.
+Local browser autosave remains enabled as an offline safety copy. Account data is stored in the Site's private D1 database and is keyed server-side by the authenticated Sites user ID.
 
 ## 📂 Features Overview
 
