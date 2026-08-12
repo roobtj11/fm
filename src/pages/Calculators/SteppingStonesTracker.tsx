@@ -81,6 +81,12 @@ type DirectionStats = {
     interval: [number, number] | null;
 };
 
+type StoneRecommendation = {
+    choice: SteppingStoneChoice;
+    confidence: 'Balanced pick' | 'Early signal' | 'Medium confidence' | 'High confidence';
+    reason: string;
+};
+
 const getDirectionStats = (
     entries: SteppingStoneEntry[],
     choice: SteppingStoneChoice,
@@ -163,6 +169,63 @@ export default function SteppingStonesTracker() {
     const saveTracker = (next: SteppingStonesTracker) => {
         updateNestedProfile('misc', { steppingStones: next });
     };
+
+    const recommendation = useMemo<StoneRecommendation>(() => {
+        const stoneStats = stats.perStone[currentStone - 1];
+        const upStone = stoneStats?.up ?? getDirectionStats([], 'up');
+        const downStone = stoneStats?.down ?? getDirectionStats([], 'down');
+        const stoneSamples = upStone.total + downStone.total;
+
+        // Laplace smoothing prevents one lucky result from becoming a 0%/100% prediction.
+        const smoothed = (direction: DirectionStats) =>
+            (direction.safe + 1) / (direction.total + 2);
+        const stoneWeight = stoneSamples / (stoneSamples + 6);
+        const upScore = (smoothed(upStone) * stoneWeight)
+            + (smoothed(stats.up) * (1 - stoneWeight));
+        const downScore = (smoothed(downStone) * stoneWeight)
+            + (smoothed(stats.down) * (1 - stoneWeight));
+        const margin = Math.abs(upScore - downScore);
+
+        let suggested: SteppingStoneChoice;
+        if (stoneSamples === 0 && allEntries.length === 0) {
+            suggested = (currentStone + tracker.attempts.length) % 2 === 0 ? 'down' : 'up';
+        } else if (margin < 0.015 && upStone.total !== downStone.total) {
+            suggested = upStone.total < downStone.total ? 'up' : 'down';
+        } else if (margin < 0.015) {
+            suggested = (currentStone + tracker.attempts.length) % 2 === 0 ? 'down' : 'up';
+        } else {
+            suggested = upScore > downScore ? 'up' : 'down';
+        }
+
+        if (allEntries.length === 0) {
+            return {
+                choice: suggested,
+                confidence: 'Balanced pick',
+                reason: 'There is no history yet, so this is a balanced starting pick rather than a prediction.',
+            };
+        }
+        if (stoneSamples >= 20 && margin >= 0.15) {
+            return {
+                choice: suggested,
+                confidence: 'High confidence',
+                reason: `This direction has the stronger smoothed result at stone ${currentStone}, supported by ${stoneSamples} recorded choices here.`,
+            };
+        }
+        if (stoneSamples >= 8 && margin >= 0.08) {
+            return {
+                choice: suggested,
+                confidence: 'Medium confidence',
+                reason: `This direction currently performs better at stone ${currentStone}, with the overall history used to steady the estimate.`,
+            };
+        }
+        return {
+            choice: suggested,
+            confidence: 'Early signal',
+            reason: stoneSamples > 0
+                ? `The sample at stone ${currentStone} is still small, so this combines its results with your overall history.`
+                : `Stone ${currentStone} has no results yet, so this uses your overall history and keeps close calls balanced.`,
+        };
+    }, [allEntries.length, currentStone, stats.down, stats.perStone, stats.up, tracker.attempts.length]);
 
     const startAttempt = () => {
         if (currentAttempt) return;
@@ -350,6 +413,49 @@ export default function SteppingStonesTracker() {
                         </button>
                     ) : (
                         <>
+                            <div className="mt-6 rounded-xl border border-cyan-700/70 bg-cyan-950/35 p-4">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                        <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-cyan-300">
+                                            <Sparkles className="h-4 w-4" />
+                                            Suggested next move
+                                        </div>
+                                        <div className="mt-2 flex items-center gap-3">
+                                            <span className={`flex h-11 w-11 items-center justify-center rounded-full ${
+                                                recommendation.choice === 'up'
+                                                    ? 'bg-emerald-500/20 text-emerald-300'
+                                                    : 'bg-violet-500/20 text-violet-300'
+                                            }`}>
+                                                {recommendation.choice === 'up'
+                                                    ? <ArrowUp className="h-7 w-7" />
+                                                    : <ArrowDown className="h-7 w-7" />}
+                                            </span>
+                                            <div>
+                                                <div className="text-xl font-bold text-white">
+                                                    Try {recommendation.choice === 'up' ? 'Up' : 'Down'}
+                                                </div>
+                                                <div className="text-xs font-semibold text-cyan-300">
+                                                    {recommendation.confidence}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setChoice(recommendation.choice)}
+                                        className="rounded-lg bg-cyan-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-cyan-400"
+                                    >
+                                        Use this suggestion
+                                    </button>
+                                </div>
+                                <p className="mt-3 text-sm leading-5 text-cyan-100/70">
+                                    {recommendation.reason}
+                                </p>
+                                <p className="mt-2 text-xs text-slate-500">
+                                    Suggestions learn from this profile's history, but cannot guarantee a safe stone.
+                                </p>
+                            </div>
+
                             <div className="mt-6 grid grid-cols-2 gap-3">
                                 <button
                                     type="button"

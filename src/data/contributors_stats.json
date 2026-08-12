@@ -5,17 +5,23 @@
     "login": "1vcian",
     "additions": 3360877,
     "deletions": 706471,
-    "commits": 222,
-    "avatar_url": "https://avatars.githubusercontent.com/u/15808247?v=4",
-    "html_url": "https://github.com/1vcian"
+    "commits": 222
   },
   {
-    "name": "Tyler Roob",
+    "name": "Codex",
+    "email": "codex@openai.com",
+    "login": null,
+    "additions": 2657673,
+    "deletions": 1,
+    "commits": 2
+  },
+  {
+    "name": "roobtj11",
     "email": "79338430+roobtj11@users.noreply.github.com",
     "login": null,
-    "additions": 2354,
-    "deletions": 389,
-    "commits": 1
+    "additions": 6150,
+    "deletions": 3723,
+    "commits": 2
   },
   {
     "name": "Athos",
@@ -31,9 +37,7 @@
     "login": "Simon-Mignot",
     "additions": 673,
     "deletions": 70,
-    "commits": 2,
-    "avatar_url": "https://avatars.githubusercontent.com/u/9926861?v=4",
-    "html_url": "https://github.com/Simon-Mignot"
+    "commits": 2
   },
   {
     "name": "Demian Myers",
@@ -41,8 +45,6 @@
     "login": "murkyknight",
     "additions": 4,
     "deletions": 2,
-    "commits": 1,
-    "avatar_url": "https://avatars.githubusercontent.com/u/27320933?v=4",
-    "html_url": "https://github.com/murkyknight"
+    "commits": 1
   }
 ]
