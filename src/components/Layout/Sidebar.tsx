@@ -64,6 +64,8 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             items: [
                 { name: 'Overview', path: '/', icon: LayoutDashboard },
                 { name: 'Edit Profile', path: '/profile', icon: Pencil, isProfile: true },
+                { name: 'My Pets', path: '/my-pets', icon: Cat },
+                { name: 'My Mounts', path: '/my-mounts', icon: Star },
                 { name: 'Account & Sync', path: '/account', icon: Shield },
                 { name: 'Progress Prediction', path: '/progress-prediction', icon: TrendingUp },
                 { name: 'Mission Calculator', path: '/solo-mission', icon: Target },

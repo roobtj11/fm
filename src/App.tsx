@@ -12,6 +12,7 @@ import Configs from './pages/Configs';
 import Mounts from './pages/Mounts';
 import Items from './pages/Items';
 import Pets from './pages/Pets';
+import { PetCollection, MountCollection } from './pages/CompanionCollection';
 import Skills from './pages/Skills';
 import Eggs from './pages/Eggs';
 import Dungeons from './pages/Dungeons';
@@ -74,6 +75,8 @@ function App() {
                                     <Route path="forge-calculator" element={<ForgeCalculator />} />
                                     <Route path="items" element={<Items />} />
                                     <Route path="pets" element={<Pets />} />
+                                    <Route path="my-pets" element={<PetCollection />} />
+                                    <Route path="my-mounts" element={<MountCollection />} />
 
                                     <Route path="tech-tree" element={<TechTree />} />
                                     <Route path="arena" element={<Arena />} />

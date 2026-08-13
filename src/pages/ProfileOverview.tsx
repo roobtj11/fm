@@ -23,6 +23,7 @@ import { useGameData } from '../hooks/useGameData';
 import { getPerfection } from '../utils/itemCalculations';
 import { formatCompactNumber } from '../utils/statsCalculator';
 import { ProfileIcon } from '../components/Profile/ProfileHeaderPanel';
+import { BuildAnalytics } from '../components/Profile/BuildAnalytics';
 
 const SLOT_LABELS: Record<string, string> = {
     Weapon: 'Weapon', Helmet: 'Helmet', Body: 'Armour', Gloves: 'Gloves',
@@ -143,6 +144,8 @@ export default function ProfileOverview() {
                     </div>
                 </div>
             </section>
+
+            <BuildAnalytics profile={profile} stats={stats} />
 
             <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
                 <OverviewCard title="Equipment" icon={<Trophy className="h-5 w-5 text-amber-300" />} action="Edit gear" path="/profile">

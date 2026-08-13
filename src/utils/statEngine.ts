@@ -1172,7 +1172,9 @@ export class StatEngine {
         const skillPassiveDamageBonus = this.techModifiers['SkillPassiveDamage'] || 0;
         const skillPassiveHealthBonus = this.techModifiers['SkillPassiveHealth'] || 0;
         const skillActiveDamageBonus = this.techModifiers['SkillDamage'] || 0;
-        const skillActiveHealthBonus = this.techModifiers['SkillDamage'] || 0;
+        // Skill Damage affects damage skills only. It must not also inflate healing
+        // skills, or a Skill Damage roll is counted on both sides of balanced scoring.
+        const skillActiveHealthBonus = 0;
 
         const passives = this.profile.skills?.passives || {};
         let totalPassiveDmg = 0;
@@ -1624,14 +1626,14 @@ export class StatEngine {
         this.stats.lifeSteal = this.combine(this.stats.lifeSteal, this.secondaryStats.lifeSteal, 'Multiplier');
         this.stats.skillCooldownReduction = this.combine(this.stats.skillCooldownReduction, this.secondaryStats.skillCooldownMulti, 'OneMinusMultiplier');
         // Skill multipliers: add item substats as additive bonus
-        // SkillDamageMulti applies to both Damage and Healing of active skills
+        // Skill Damage and Skill Healing are separate active-skill layers.
         this.stats.skillDamageMultiplier += this.secondaryStats.skillDamageMulti;
-        this.stats.skillHealthMultiplier += (this.secondaryStats.skillHealthMulti + this.secondaryStats.skillDamageMulti);
+        this.stats.skillHealthMultiplier += this.secondaryStats.skillHealthMulti;
         this.stats.moveSpeed = this.combine(this.stats.moveSpeed, this.secondaryStats.moveSpeed, 'Additive');
 
         // Populate detailed breakdowns for secondary stats
         this.stats.skillDamageBreakdown.substats = this.secondaryStats.skillDamageMulti;
-        this.stats.skillHealthBreakdown.substats = (this.secondaryStats.skillHealthMulti + this.secondaryStats.skillDamageMulti);
+        this.stats.skillHealthBreakdown.substats = this.secondaryStats.skillHealthMulti;
 
         // Apply Skill Ascension to skill multipliers (MIRRORS Forge Ascension for equipment)
         // Pattern: skillEffective = (1 + techBonus + itemBonus) * skillAscension
