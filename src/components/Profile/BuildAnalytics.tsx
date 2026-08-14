@@ -73,9 +73,9 @@ export function BuildAnalytics({ profile, stats }: BuildAnalyticsProps) {
         const balance = [
             { label: 'Offense', value: Math.min(100, damageIndex / 5 * 100), color: '#fb7134' },
             { label: 'Sustain', value: sustainIndex, color: '#4ade80' },
-            { label: 'Critical', value: Math.min(100, stats.criticalChance * 100), color: '#facc15' },
+            { label: 'Crit', value: Math.min(100, stats.criticalChance * 100), color: '#facc15' },
             { label: 'Speed', value: Math.min(100, attackSpeedBonus * 100), color: '#38bdf8' },
-            { label: 'Skills', value: stats.realTotalDps > 0 ? Math.min(100, stats.skillDps / stats.realTotalDps * 100) : 0, color: '#a78bfa' },
+            { label: 'Skill', value: stats.realTotalDps > 0 ? Math.min(100, stats.skillDps / stats.realTotalDps * 100) : 0, color: '#a78bfa' },
             { label: 'Defense', value: Math.min(100, (stats.blockChance + stats.healthRegen * 2) * 100), color: '#94a3b8' },
         ];
 
@@ -129,17 +129,7 @@ export function BuildAnalytics({ profile, stats }: BuildAnalyticsProps) {
                 <IndexCard label="Sustain index" value={String(analytics.sustainIndex)} tone="green" icon={<Droplets className="h-5 w-5" />}>
                     Lifesteal amplified by attack speed and double-hit chance. Higher means steadier healing.
                 </IndexCard>
-                <div className="rounded-2xl border border-[#3b342d] bg-[#211d19] p-5">
-                    <div className="mb-4 flex items-center justify-between"><h3 className="font-black text-white">Build balance</h3><Gauge className="h-5 w-5 text-amber-300" /></div>
-                    <div className="grid grid-cols-2 gap-x-5 gap-y-3">
-                        {analytics.balance.map(item => (
-                            <div key={item.label}>
-                                <div className="mb-1 flex justify-between text-xs"><span className="text-[#cbb8a0]">{item.label}</span><span className="font-bold text-white">{Math.round(item.value)}</span></div>
-                                <div className="h-2 overflow-hidden rounded-full bg-[#100e0c]"><div className="h-full rounded-full" style={{ width: `${item.value}%`, backgroundColor: item.color }} /></div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
+                <RadarChart items={analytics.balance} />
             </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
@@ -198,6 +188,43 @@ function AnalyticsProgress({ stat }: { stat: ProgressStat }) {
 
 function IndexCard({ label, value, tone, icon, children }: { label: string; value: string; tone: 'orange' | 'green'; icon: ReactNode; children: ReactNode }) {
     return <div className="rounded-2xl border border-[#3b342d] bg-[#211d19] p-5"><div className={`flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.14em] ${tone === 'orange' ? 'text-orange-400' : 'text-emerald-400'}`}>{icon}{label}</div><div className={`mt-2 text-4xl font-black ${tone === 'orange' ? 'text-orange-500' : 'text-emerald-400'}`}>{value}</div><p className="mt-2 text-xs leading-5 text-[#ad9b88]">{children}</p></div>;
+}
+
+function RadarChart({ items }: { items: { label: string; value: number; color: string }[] }) {
+    const radius = 34;
+    const goalValues = [78, 68, 76, 62, 66, 52];
+    const polygon = (values: number[]) => values.map((value, index) => {
+        const angle = (-90 + index * 60) * Math.PI / 180;
+        const distance = radius * Math.max(0, Math.min(100, value)) / 100;
+        return `${50 + Math.cos(angle) * distance}% ${50 + Math.sin(angle) * distance}%`;
+    }).join(', ');
+    const buildShape = polygon(items.map(item => item.value));
+    const goalShape = polygon(goalValues);
+    const labelPositions = [
+        'left-1/2 top-0 -translate-x-1/2',
+        'right-0 top-[22%]',
+        'right-0 bottom-[19%]',
+        'bottom-0 left-1/2 -translate-x-1/2',
+        'bottom-[19%] left-0',
+        'left-0 top-[22%]',
+    ];
+
+    return <div className="rounded-2xl border border-[#3b342d] bg-[#211d19] p-5">
+        <div className="flex items-center justify-between"><h3 className="font-black text-white">Build balance</h3><Gauge className="h-5 w-5 text-amber-300" /></div>
+        <div className="relative mx-auto mt-2 aspect-square w-full max-w-[21rem]" role="img" aria-label={`Build radar: ${items.map(item => `${item.label} ${Math.round(item.value)}`).join(', ')}`}>
+            {[100, 75, 50, 25].map(size => <div key={size} className="absolute left-1/2 top-1/2 aspect-square -translate-x-1/2 -translate-y-1/2 bg-[#4a4139]" style={{ width: `${size * .68}%`, clipPath: 'polygon(50% 0%, 93.3% 25%, 93.3% 75%, 50% 100%, 6.7% 75%, 6.7% 25%)' }}><div className="absolute inset-px bg-[#211d19]" style={{ clipPath: 'polygon(50% 0%, 93.3% 25%, 93.3% 75%, 50% 100%, 6.7% 75%, 6.7% 25%)' }} /></div>)}
+            {items.map((_, index) => <div key={index} className="absolute left-1/2 top-1/2 h-px w-[34%] origin-left bg-[#4a4139]" style={{ transform: `rotate(${-90 + index * 60}deg)` }} />)}
+            <div className="absolute inset-0 bg-amber-400/15" style={{ clipPath: `polygon(${goalShape})` }} />
+            {goalValues.map((value, index) => {
+                const angle = (-90 + index * 60) * Math.PI / 180;
+                const distance = radius * value / 100;
+                return <i key={index} className="absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300" style={{ left: `${50 + Math.cos(angle) * distance}%`, top: `${50 + Math.sin(angle) * distance}%` }} />;
+            })}
+            <div className="absolute inset-0 bg-orange-500/35 drop-shadow-[0_0_5px_rgba(249,115,22,.75)]" style={{ clipPath: `polygon(${buildShape})` }} />
+            {items.map((item, index) => <span key={item.label} className={`absolute text-xs font-bold text-[#cfb99e] ${labelPositions[index]}`}><span className="text-white">{Math.round(item.value)}</span> {item.label}</span>)}
+        </div>
+        <div className="mt-1 flex justify-center gap-5 text-[11px] text-[#8f806f]"><span className="inline-flex items-center gap-1.5"><i className="h-2 w-4 rounded-sm bg-orange-500/60" />your build</span><span className="inline-flex items-center gap-1.5"><i className="h-2 w-4 rounded-sm bg-amber-400/30" />goal profile</span></div>
+    </div>;
 }
 
 function SegmentedBar({ label, items }: { label: string; items: { label: string; count: number; color: string }[] }) {
