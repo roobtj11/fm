@@ -199,7 +199,7 @@ export function SkillPanel({ variant = 'default', title, compareSkills, consider
         const cooldown = skillData.Cooldown || 0;
 
         // Skill Layer: computed locally to respect variant-specific ascension levels
-        // Tech tree bonus (SkillDamage applies to both dmg and heal for active skills)
+        // SkillDamage affects damage only; healing has its own item/stat layer.
         const techSkillBonus = techModifiers['SkillDamage'] || 0;
         const clanSkillBonus = clanModifiers['SkillDamage'] || 0;
         // Item substats from globalStats (these don't change between variants)
@@ -208,7 +208,7 @@ export function SkillPanel({ variant = 'default', title, compareSkills, consider
 
         // Skill Layer = (1 + tech + items) * ascension
         const skillDmgMulti = (1 + techSkillBonus + itemSkillDmgBonus) * (activeAscensionDmgMulti || 1);
-        const skillHpMulti = (1 + techSkillBonus + itemSkillHpBonus) * (activeAscensionHpMulti || 1);
+        const skillHpMulti = (1 + itemSkillHpBonus) * (activeAscensionHpMulti || 1);
 
         // Common Layer from globalStats (Tech Tree Dmg + Item Dmg%)
         // Active skills (including heal/buff) use the global Damage Multiplier
@@ -243,7 +243,7 @@ export function SkillPanel({ variant = 'default', title, compareSkills, consider
             details: {
                 damage: {
                     base: baseDmg,
-                    techMulti: techSkillBonus,
+                    techMulti: 0,
                     clanTechMulti: clanSkillBonus,
                     itemMulti: itemSkillDmgBonus,
                     ascMulti: activeAscensionDmgMulti || 1,
@@ -435,6 +435,7 @@ export function SkillPanel({ variant = 'default', title, compareSkills, consider
                                                 <div className="text-sm font-mono font-bold text-red-400 leading-tight">
                                                     {formatNumber(stats.totalDamage)}
                                                 </div>
+                                                <div className="text-[8px] font-mono text-text-muted">Lv.{skill.level} base {formatNumber(stats.baseDamage)}</div>
                                                 {stats.count > 1 && (
                                                     <div className="text-[8px] text-red-400/60 font-mono italic">
                                                         ({formatNumber(stats.damage)} / hit)
@@ -455,9 +456,10 @@ export function SkillPanel({ variant = 'default', title, compareSkills, consider
                                                 <div className="text-sm font-mono font-bold text-green-400 leading-tight">
                                                     {formatNumber(stats.health)}
                                                 </div>
+                                                <div className="text-[8px] font-mono text-text-muted">Lv.{skill.level} base {formatNumber(stats.baseHealth)}</div>
                                                 <div className="text-[9px] font-mono font-bold text-text-muted/80 flex items-center justify-center flex-wrap gap-x-1 gap-y-0 mt-0.5 text-center">
-                                                    <span>x{stats.multi.toFixed(2)}</span>
-                                                    <span className="text-green-400/80">({((stats.multi - 1) * 100).toFixed(1)}%)</span>
+                                                    <span>x{stats.details.health.total.toFixed(2)}</span>
+                                                    <span className="text-green-400/80">({((stats.details.health.total - 1) * 100).toFixed(1)}%)</span>
                                                 </div>
                                                 <div className="hidden group-hover/heal:block">
                                                     <StatBreakdownTooltip health={stats.details.health} />

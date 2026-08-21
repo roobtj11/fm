@@ -171,8 +171,17 @@ export interface UserProfile {
         techPlanStartDate?: string;
         plannerSleepStart?: string;
         plannerSleepEnd?: string;
+        plannerMaxSteps?: number;
         plannerMaxWait?: number;
         plannerMinWaitBetweenNodes?: number;
+        plannerPriorityWeights?: Record<'war_points' | 'dps' | 'speed' | 'time', number>;
+        plannerAllowedTrees?: string[];
+        plannerTreeWeights?: Record<string, number>;
+        plannerPotionReserve?: number;
+        plannerMaxTotalHours?: number;
+        plannerMaxNodeMinutes?: number;
+        plannerLevelCaps?: Record<string, number>;
+        plannerPhases?: { id: string; throughStep: number; focus: 'war_points' | 'dps' | 'speed' | 'time' }[];
         techPlanMetadata?: { isAuto: boolean; config?: any };
         useSkinWindup?: boolean;
         steppingStones?: SteppingStonesTracker;

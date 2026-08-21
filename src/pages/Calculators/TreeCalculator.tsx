@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTreeOptimizer, TechUpgrade } from '../../hooks/useTreeOptimizer';
-import { useTreePlanner } from '../../hooks/useTreePlanner';
+import { useTreePlanner, PlannerPhase, PlannerPriority } from '../../hooks/useTreePlanner';
 import { useProfile } from '../../context/ProfileContext';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/UI/Card';
 import { SpriteIcon } from '../../components/UI/SpriteIcon';
@@ -267,15 +267,26 @@ const AutoPlannerControls = ({ planner, profile, updateNestedProfile }: {
     profile: any,
     updateNestedProfile: (category: keyof UserProfile, data: any) => void
 }) => {
-    // Local Auto-planner state - isolated from parent to avoid lag
-    const [autoPriorities, setAutoPriorities] = useState<Set<string>>(new Set(['war_points']));
-    const [autoNumSteps, setAutoNumSteps] = useState(100);
+    const priorityLabels: Record<PlannerPriority, string> = { war_points: 'War points', dps: 'DPS / stats', speed: 'Research speed', time: 'Shortest first' };
+    const treeLabels: Record<string, string> = { Forge: 'Forge', Power: 'Power', SkillsPetTech: 'Skills & Pets' };
+    const [priorityWeights, setPriorityWeights] = useState<Record<PlannerPriority, number>>(profile.misc.plannerPriorityWeights || { war_points: 100, dps: 50, speed: 50, time: 25 });
+    const [autoNumSteps, setAutoNumSteps] = useState(profile.misc.plannerMaxSteps || 100);
     const [autoPotionBudget, setAutoPotionBudget] = useState(profile.misc.techPotions || 0);
+    const [potionReserve, setPotionReserve] = useState(profile.misc.plannerPotionReserve || 0);
     const [autoSleepStart, setAutoSleepStart] = useState(profile.misc.plannerSleepStart || '23:00');
     const [autoSleepEnd, setAutoSleepEnd] = useState(profile.misc.plannerSleepEnd || '07:00');
     const [autoMaxWait, setAutoMaxWait] = useState(profile.misc.plannerMaxWait || 120);
     const [autoMinWait, setAutoMinWait] = useState(profile.misc.plannerMinWaitBetweenNodes || 1);
-    const [autoAllowedTrees, setAutoAllowedTrees] = useState<string[]>(['Forge', 'Power', 'SkillsPetTech']);
+    const [autoAllowedTrees, setAutoAllowedTrees] = useState<string[]>(profile.misc.plannerAllowedTrees || ['Forge', 'Power', 'SkillsPetTech']);
+    const [treeWeights, setTreeWeights] = useState<Record<string, number>>(profile.misc.plannerTreeWeights || { Forge: 100, Power: 100, SkillsPetTech: 100 });
+    const [maxTotalHours, setMaxTotalHours] = useState(profile.misc.plannerMaxTotalHours || 0);
+    const [maxNodeMinutes, setMaxNodeMinutes] = useState(profile.misc.plannerMaxNodeMinutes || 0);
+    const [levelCaps, setLevelCaps] = useState<Record<string, number>>(profile.misc.plannerLevelCaps || { Forge: 999, Power: 999, SkillsPetTech: 999 });
+    const [phases, setPhases] = useState<PlannerPhase[]>(profile.misc.plannerPhases || []);
+    const hasPriority = Object.values(priorityWeights).some(weight => weight > 0);
+
+    const addPhase = () => setPhases(prev => [...prev, { id: `phase_${Date.now()}`, throughStep: Math.min(autoNumSteps, (prev[prev.length - 1]?.throughStep || 0) + 25), focus: 'war_points' }]);
+    const updatePhase = (id: string, patch: Partial<PlannerPhase>) => setPhases(prev => prev.map(phase => phase.id === id ? { ...phase, ...patch } : phase));
 
     return (
         <Card className="p-6 bg-gradient-to-br from-accent-primary/5 via-bg-secondary to-accent-secondary/5 border-accent-primary/30 shadow-lg shadow-accent-primary/5">
@@ -287,82 +298,30 @@ const AutoPlannerControls = ({ planner, profile, updateNestedProfile }: {
             </CardHeader>
             <CardContent className="space-y-4">
                 <p className="text-[10px] text-text-muted leading-relaxed">
-                    Select one or more priorities and generate an optimized upgrade plan automatically.
+                    Tune priorities, tree balance, budgets, stop rules, sleep alignment, and phase-by-phase focus.
                 </p>
 
                 {/* Target Trees */}
                 <div className="space-y-2">
                     <label className="text-[10px] font-bold text-text-secondary uppercase">Target Trees</label>
-                    <div className="grid grid-cols-3 gap-2">
-                        {[
-                            { key: 'Forge', label: 'Forge', icon: <Hammer size={12} /> },
-                            { key: 'Power', label: 'Power', icon: <Shield size={12} /> },
-                            { key: 'SkillsPetTech', label: 'SPT', icon: <Sparkles size={12} /> }
-                        ].map(t => {
-                            const isActive = autoAllowedTrees.includes(t.key);
+                    <div className="space-y-2">
+                        {Object.entries(treeLabels).map(([key, label]) => {
+                            const icons: Record<string, React.ReactNode> = { Forge: <Hammer size={12} />, Power: <Shield size={12} />, SkillsPetTech: <Sparkles size={12} /> };
+                            const isActive = autoAllowedTrees.includes(key);
                             return (
-                                <button
-                                    key={t.key}
-                                    onClick={() => {
-                                        setAutoAllowedTrees(prev => {
-                                            if (prev.includes(t.key)) {
-                                                if (prev.length <= 1) return prev; // Keep at least one
-                                                return prev.filter(x => x !== t.key);
-                                            }
-                                            return [...prev, t.key];
-                                        });
-                                    }}
-                                    className={cn(
-                                        "flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg border text-[10px] font-bold transition-all",
-                                        isActive
-                                            ? "border-accent-secondary bg-accent-secondary/10 text-accent-secondary"
-                                            : "border-white/5 bg-bg-primary/30 text-text-muted hover:border-white/20"
-                                    )}
-                                >
-                                    <span>{t.icon}</span>
-                                    {t.label}
-                                </button>
+                                <div key={key} className="grid grid-cols-[6.5rem_1fr_2.8rem] items-center gap-2 rounded-lg border border-white/5 bg-bg-primary/20 p-2">
+                                    <button onClick={() => setAutoAllowedTrees(prev => isActive ? (prev.length > 1 ? prev.filter(item => item !== key) : prev) : [...prev, key])} className={cn('flex items-center gap-1.5 text-[10px] font-bold', isActive ? 'text-accent-secondary' : 'text-text-muted')}><span>{icons[key]}</span>{label}</button>
+                                    <input type="range" min="10" max="200" step="5" disabled={!isActive} value={treeWeights[key] || 100} onChange={e => setTreeWeights(prev => ({ ...prev, [key]: Number(e.target.value) }))} className="w-full accent-accent-secondary disabled:opacity-30" />
+                                    <span className="text-right text-[10px] font-mono text-text-secondary">{treeWeights[key] || 100}%</span>
+                                </div>
                             );
                         })}
                     </div>
                 </div>
 
-                {/* Priority Toggles */}
                 <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-text-secondary uppercase">Priorities</label>
-                    <div className="grid grid-cols-2 gap-2">
-                        {[
-                            { key: 'war_points', label: 'War Points', icon: <Trophy size={18} />, desc: 'Max points/time' },
-                            { key: 'dps', label: 'DPS / Stats', icon: <Swords size={18} />, desc: 'Combat power' },
-                            { key: 'speed', label: 'Research Speed', icon: <Gauge size={18} />, desc: 'Faster upgrades' },
-                            { key: 'time', label: 'Min Time', icon: <Timer size={18} />, desc: 'Short first' },
-                        ].map(p => {
-                            const isActive = autoPriorities.has(p.key);
-                            return (
-                                <button
-                                    key={p.key}
-                                    onClick={() => {
-                                        setAutoPriorities(prev => {
-                                            const next = new Set(prev);
-                                            if (next.has(p.key)) next.delete(p.key);
-                                            else next.add(p.key);
-                                            return next;
-                                        });
-                                    }}
-                                    className={cn(
-                                        "flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all text-center",
-                                        isActive
-                                            ? "border-accent-primary bg-accent-primary/10 shadow-glow"
-                                            : "border-white/10 bg-bg-primary/30 hover:border-white/20"
-                                    )}
-                                >
-                                    <span className={cn("", isActive ? "text-accent-primary" : "text-text-muted")}>{p.icon}</span>
-                                    <span className={cn("text-[10px] font-bold", isActive ? "text-accent-primary" : "text-text-secondary")}>{p.label}</span>
-                                    <span className="text-[8px] text-text-muted">{p.desc}</span>
-                                </button>
-                            );
-                        })}
-                    </div>
+                    <label className="text-[10px] font-bold text-text-secondary uppercase">Priority weights</label>
+                    {(Object.keys(priorityLabels) as PlannerPriority[]).map(key => <WeightControl key={key} label={priorityLabels[key]} value={priorityWeights[key]} onChange={value => setPriorityWeights(prev => ({ ...prev, [key]: value }))} />)}
                 </div>
 
                 {/* Number of Steps */}
@@ -382,8 +341,8 @@ const AutoPlannerControls = ({ planner, profile, updateNestedProfile }: {
                     />
                 </div>
 
-                {/* Potion Budget */}
-                <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
                     <label className="text-[10px] font-bold text-text-secondary uppercase flex items-center gap-2">
                         <SpriteIcon name="Potion" size={12} />
                         Potion Budget
@@ -404,6 +363,25 @@ const AutoPlannerControls = ({ planner, profile, updateNestedProfile }: {
                             >∞</button>
                         )}
                     </div>
+                  </div>
+                  <NumberField label="Keep in reserve" value={potionReserve} onChange={setPotionReserve} suffix="potions" />
+                </div>
+
+                <div className="pt-2 border-t border-white/5 space-y-3">
+                    <label className="text-[10px] font-bold text-text-secondary uppercase">Stopping points</label>
+                    <div className="grid grid-cols-2 gap-3">
+                        <NumberField label="Maximum schedule" value={maxTotalHours} onChange={setMaxTotalHours} suffix="hours · 0 = none" />
+                        <NumberField label="Longest one upgrade" value={maxNodeMinutes} onChange={setMaxNodeMinutes} suffix="minutes · 0 = none" />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                        {Object.entries(treeLabels).map(([key, label]) => <NumberField key={key} label={`${label} node cap`} value={levelCaps[key] || 999} onChange={value => setLevelCaps(prev => ({ ...prev, [key]: value }))} suffix="max level" />)}
+                    </div>
+                </div>
+
+                <div className="pt-2 border-t border-white/5 space-y-3">
+                    <div className="flex items-center justify-between"><label className="text-[10px] font-bold text-text-secondary uppercase">Plan phases</label><button onClick={addPhase} className="inline-flex items-center gap-1 text-[10px] font-bold text-accent-primary"><Plus size={12} />Add phase</button></div>
+                    <p className="text-[8px] text-text-muted">A phase temporarily raises one focus to maximum through its ending step.</p>
+                    {phases.length === 0 ? <div className="rounded-lg border border-dashed border-white/10 p-3 text-center text-[9px] text-text-muted">No phases — use the same weights for the whole plan.</div> : phases.map((phase, index) => <div key={phase.id} className="grid grid-cols-[1fr_5.5rem_2rem] items-end gap-2 rounded-lg border border-white/5 bg-bg-primary/20 p-2"><label className="text-[9px] text-text-muted">Phase {index + 1}<select value={phase.focus} onChange={e => updatePhase(phase.id, { focus: e.target.value as PlannerPriority })} className="mt-1 w-full rounded border border-border bg-bg-input p-1.5 text-xs text-white">{(Object.keys(priorityLabels) as PlannerPriority[]).map(key => <option key={key} value={key}>{priorityLabels[key]}</option>)}</select></label><label className="text-[9px] text-text-muted">Through step<input type="number" min="1" max={autoNumSteps} value={phase.throughStep} onChange={e => updatePhase(phase.id, { throughStep: Math.max(1, Number(e.target.value)) })} className="mt-1 w-full rounded border border-border bg-bg-input p-1.5 text-xs text-white" /></label><button onClick={() => setPhases(prev => prev.filter(item => item.id !== phase.id))} className="mb-0.5 rounded p-1.5 text-red-400 hover:bg-red-500/10"><Trash2 size={14} /></button></div>)}
                 </div>
 
                 {/* Schedule Optimization */}
@@ -471,16 +449,8 @@ const AutoPlannerControls = ({ planner, profile, updateNestedProfile }: {
                 {/* Generate Button */}
                 <button
                     onClick={() => {
-                        planner.autoPlan(
-                            autoPriorities.size > 0 ? autoPriorities : new Set(['war_points']),
-                            autoNumSteps,
-                            autoPotionBudget > 0 ? autoPotionBudget : undefined,
-                            autoSleepStart,
-                            autoSleepEnd,
-                            autoMaxWait,
-                            autoMinWait,
-                            autoAllowedTrees
-                        );
+                        const options = { priorityWeights, numNodes: autoNumSteps, potionBudget: autoPotionBudget > 0 ? autoPotionBudget : undefined, potionReserve, sleepStart: autoSleepStart, sleepEnd: autoSleepEnd, maxWaitMinutes: autoMaxWait, minWaitMinutes: autoMinWait, allowedTrees: autoAllowedTrees, treeWeights, maxTotalHours, maxNodeMinutes, levelCaps, phases };
+                        planner.autoPlan(options);
                         // Persist settings
                         updateNestedProfile('misc', {
                             techPotions: autoPotionBudget,
@@ -488,23 +458,39 @@ const AutoPlannerControls = ({ planner, profile, updateNestedProfile }: {
                             plannerSleepStart: autoSleepStart,
                             plannerSleepEnd: autoSleepEnd,
                             plannerMaxWait: autoMaxWait,
-                            plannerMinWaitBetweenNodes: autoMinWait
+                            plannerMinWaitBetweenNodes: autoMinWait,
+                            plannerPriorityWeights: priorityWeights,
+                            plannerAllowedTrees: autoAllowedTrees,
+                            plannerTreeWeights: treeWeights,
+                            plannerPotionReserve: potionReserve,
+                            plannerMaxTotalHours: maxTotalHours,
+                            plannerMaxNodeMinutes: maxNodeMinutes,
+                            plannerLevelCaps: levelCaps,
+                            plannerPhases: phases,
                         });
                     }}
-                    disabled={autoPriorities.size === 0 || autoAllowedTrees.length === 0}
+                    disabled={!hasPriority || autoAllowedTrees.length === 0}
                     className="w-full py-3.5 bg-gradient-to-r from-accent-primary to-accent-secondary text-black font-black uppercase tracking-tighter rounded-xl hover:opacity-90 disabled:opacity-30 disabled:grayscale transition-all shadow-xl shadow-accent-primary/20 flex items-center justify-center gap-2 group"
                 >
                     <Zap size={18} className="group-hover:scale-110 transition-transform" />
                     Generate Plan
                 </button>
 
-                {autoPriorities.size === 0 && (
+                {!hasPriority && (
                     <p className="text-[9px] text-red-400 text-center">Select at least one priority</p>
                 )}
             </CardContent>
         </Card>
     );
 };
+
+function WeightControl({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+    return <div className="grid grid-cols-[7rem_1fr_2.8rem] items-center gap-2"><span className="text-[9px] text-text-muted">{label}</span><input type="range" min="0" max="100" step="5" value={value} onChange={e => onChange(Number(e.target.value))} className="w-full accent-accent-primary" /><span className="text-right text-[10px] font-mono text-text-secondary">{value}%</span></div>;
+}
+
+function NumberField({ label, value, onChange, suffix }: { label: string; value: number; onChange: (value: number) => void; suffix: string }) {
+    return <label className="text-[9px] text-text-muted">{label}<input type="number" min="0" value={value} onChange={e => onChange(Math.max(0, Number(e.target.value)))} className="mt-1 w-full rounded-md border border-border bg-bg-input px-2 py-1.5 text-xs text-white outline-none focus:border-accent-secondary" /><span className="mt-0.5 block text-[7px] opacity-70">{suffix}</span></label>;
+}
 
 import { usePersistentState } from '../../hooks/usePersistentState';
 

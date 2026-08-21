@@ -306,6 +306,11 @@ export function ItemSelectionCard({
                                 <div className={cn("font-mono font-bold text-red-400 leading-tight", isCompact ? "text-[10px]" : "text-xs")}>
                                     {isCompact ? formatNumber(stats.damage) : Math.round(stats.damage).toLocaleString()}
                                 </div>
+                                {stats.details?.damage && (
+                                    <div className="text-[8px] font-mono text-text-muted/80">
+                                        Lv.{item.level || 1} base {formatNumber(stats.details.damage.base * (stats.details.damage.levelMulti || 1))}
+                                    </div>
+                                )}
                                 {(stats.multi !== undefined || stats.damageMulti !== undefined || stats.bonus !== undefined) && (
                                     <div className="text-[9px] font-mono font-bold text-text-muted/80 flex items-center justify-center flex-wrap gap-x-1 gap-y-0 mt-0.5 relative">
                                         {(() => {
@@ -339,6 +344,11 @@ export function ItemSelectionCard({
                                 <div className={cn("font-mono font-bold text-green-400 leading-tight", isCompact ? "text-[10px]" : "text-xs")}>
                                     {isCompact ? formatNumber(stats.health) : Math.round(stats.health).toLocaleString()}
                                 </div>
+                                {stats.details?.health && (
+                                    <div className="text-[8px] font-mono text-text-muted/80">
+                                        Lv.{item.level || 1} base {formatNumber(stats.details.health.base * (stats.details.health.levelMulti || 1))}
+                                    </div>
+                                )}
                                 {(stats.multi !== undefined || stats.healthMulti !== undefined || stats.bonus !== undefined) && (
                                     <div className="text-[9px] font-mono font-bold text-text-muted/80 flex items-center justify-center flex-wrap gap-x-1 gap-y-0 mt-0.5 relative">
                                         {(() => {

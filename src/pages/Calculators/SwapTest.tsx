@@ -601,39 +601,96 @@ function StatComparison({
     candidateCurrent: AggregatedStats;
     candidateOptimized: AggregatedStats;
 }) {
-    const rows: { label: string; read: (s: AggregatedStats) => number; format?: (n: number) => string }[] = [
-        { label: 'Real total DPS', read: s => s.realTotalDps },
-        { label: 'Real total HPS', read: s => s.realTotalHps },
-        { label: 'Damage', read: s => s.totalDamage },
-        { label: 'Health', read: s => s.totalHealth },
-        { label: 'Power', read: s => s.power },
-        { label: 'Attack speed', read: s => s.attackSpeedMultiplier, format: n => `${(n * 100).toFixed(2)}%` },
-        { label: 'Critical chance', read: s => s.criticalChance, format: n => `${(n * 100).toFixed(2)}%` },
-        { label: 'Double chance', read: s => s.doubleDamageChance, format: n => `${(n * 100).toFixed(2)}%` },
-        { label: 'Lifesteal', read: s => s.lifeSteal, format: n => `${(n * 100).toFixed(2)}%` }
+    type Row = { group: string; label: string; read: (s: AggregatedStats) => number; kind?: 'number' | 'percent' | 'multiplier' | 'seconds' };
+    const rows: Row[] = [
+        { group: 'Headline', label: 'Real total DPS', read: s => s.realTotalDps },
+        { group: 'Headline', label: 'Average total DPS', read: s => s.averageTotalDps },
+        { group: 'Headline', label: 'Real total HPS', read: s => s.realTotalHps },
+        { group: 'Headline', label: 'Theoretical total HPS', read: s => s.theoreticalTotalHps },
+        { group: 'Headline', label: 'Power', read: s => s.power },
+        { group: 'Damage sources', label: 'Total damage', read: s => s.totalDamage },
+        { group: 'Damage sources', label: 'Item damage', read: s => s.itemDamage },
+        { group: 'Damage sources', label: 'Weapon damage', read: s => s.weaponDamage },
+        { group: 'Damage sources', label: 'Pet damage', read: s => s.petDamage },
+        { group: 'Damage sources', label: 'Mount damage', read: s => s.mountDamage },
+        { group: 'Damage sources', label: 'Passive skill damage', read: s => s.skillPassiveDamage },
+        { group: 'Damage sources', label: 'Real weapon DPS', read: s => s.realWeaponDps },
+        { group: 'Damage sources', label: 'Skill DPS', read: s => s.skillDps },
+        { group: 'Damage sources', label: 'Skill buff DPS', read: s => s.skillBuffDps },
+        { group: 'Health sources', label: 'Total health', read: s => s.totalHealth },
+        { group: 'Health sources', label: 'Item health', read: s => s.itemHealth },
+        { group: 'Health sources', label: 'Pet health', read: s => s.petHealth },
+        { group: 'Health sources', label: 'Mount health', read: s => s.mountHealth },
+        { group: 'Health sources', label: 'Passive skill health', read: s => s.skillPassiveHealth },
+        { group: 'Health sources', label: 'Skill HPS', read: s => s.skillHps },
+        { group: 'Combat multipliers', label: 'Damage multiplier', read: s => s.damageMultiplier, kind: 'multiplier' },
+        { group: 'Combat multipliers', label: 'Health multiplier', read: s => s.healthMultiplier, kind: 'multiplier' },
+        { group: 'Combat multipliers', label: 'Melee damage multiplier', read: s => s.meleeDamageMultiplier, kind: 'multiplier' },
+        { group: 'Combat multipliers', label: 'Ranged damage multiplier', read: s => s.rangedDamageMultiplier, kind: 'multiplier' },
+        { group: 'Combat multipliers', label: 'Skill damage multiplier', read: s => s.skillDamageMultiplier, kind: 'multiplier' },
+        { group: 'Combat multipliers', label: 'Skill healing multiplier', read: s => s.skillHealthMultiplier, kind: 'multiplier' },
+        { group: 'Combat rates', label: 'Attack speed', read: s => s.attackSpeedMultiplier, kind: 'multiplier' },
+        { group: 'Combat rates', label: 'Critical chance', read: s => s.criticalChance, kind: 'percent' },
+        { group: 'Combat rates', label: 'Critical damage', read: s => s.criticalDamage, kind: 'multiplier' },
+        { group: 'Combat rates', label: 'Double chance', read: s => s.doubleDamageChance, kind: 'percent' },
+        { group: 'Combat rates', label: 'Lifesteal', read: s => s.lifeSteal, kind: 'percent' },
+        { group: 'Combat rates', label: 'Health regen', read: s => s.healthRegen, kind: 'percent' },
+        { group: 'Combat rates', label: 'Block chance', read: s => s.blockChance, kind: 'percent' },
+        { group: 'Combat rates', label: 'Skill cooldown reduction', read: s => s.skillCooldownReduction, kind: 'percent' },
+        { group: 'Timing', label: 'Real attacks per second', read: s => s.realAps },
+        { group: 'Timing', label: 'Attack cycle', read: s => s.realCycleTime, kind: 'seconds' },
+        { group: 'Timing', label: 'Double-hit cycle', read: s => s.realDoubleHitCycle, kind: 'seconds' },
+        { group: 'Utility', label: 'Move speed', read: s => s.moveSpeed, kind: 'percent' },
+        { group: 'Utility', label: 'Experience multiplier', read: s => s.experienceMultiplier, kind: 'multiplier' },
+        { group: 'Utility', label: 'Sell price multiplier', read: s => s.sellPriceMultiplier, kind: 'multiplier' },
+        { group: 'Utility', label: 'Forge freebie chance', read: s => s.forgeFreebieChance, kind: 'percent' },
+        { group: 'Utility', label: 'Egg freebie chance', read: s => s.eggFreebieChance, kind: 'percent' },
+        { group: 'Utility', label: 'Mount freebie chance', read: s => s.mountFreebieChance, kind: 'percent' },
     ];
-    const render = (row: typeof rows[number], stats: AggregatedStats) => row.format ? row.format(row.read(stats)) : formatNumber(row.read(stats));
+    const renderValue = (row: Row, value: number) => row.kind === 'percent' ? `${(value * 100).toFixed(2)}%` : row.kind === 'multiplier' ? `${value.toFixed(3)}×` : row.kind === 'seconds' ? `${value.toFixed(2)}s` : formatNumber(value);
+    const renderChange = (row: Row) => {
+        const before = row.read(current);
+        const after = row.read(candidateOptimized);
+        const delta = after - before;
+        if (row.kind === 'percent') return `${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(2)} pp`;
+        if (row.kind === 'multiplier') return `${delta >= 0 ? '+' : ''}${delta.toFixed(3)}×`;
+        if (row.kind === 'seconds') return `${delta >= 0 ? '+' : ''}${delta.toFixed(2)}s`;
+        return `${delta >= 0 ? '+' : ''}${formatNumber(delta)}`;
+    };
+    const groups = [...new Set(rows.map(row => row.group))];
 
     return (
         <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full min-w-[720px] text-sm">
+            <table className="w-full min-w-[1050px] text-sm">
                 <thead className="bg-bg-input/50 text-text-muted text-xs">
                     <tr>
                         <th className="text-left p-3">Stat</th>
-                        <th className="text-right p-3">Current optimized</th>
-                        <th className="text-right p-3">New + current companions</th>
-                        <th className="text-right p-3">New + re-optimized</th>
+                        <th className="text-right p-3">Before</th>
+                        <th className="text-right p-3">After, current companions</th>
+                        <th className="text-right p-3">After, best companions</th>
+                        <th className="text-right p-3">Change</th>
+                        <th className="text-right p-3">Change %</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {rows.map(row => (
-                        <tr key={row.label} className="border-t border-border/60">
-                            <td className="p-3 text-text-secondary">{row.label}</td>
-                            <td className="p-3 text-right font-mono text-text-primary">{render(row, current)}</td>
-                            <td className="p-3 text-right font-mono text-text-primary">{render(row, candidateCurrent)}</td>
-                            <td className="p-3 text-right font-mono text-blue-300">{render(row, candidateOptimized)}</td>
-                        </tr>
-                    ))}
+                    {groups.flatMap(group => [
+                        <tr key={`${group}-heading`} className="border-t border-border bg-bg-input/30"><td colSpan={6} className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-accent-primary">{group}</td></tr>,
+                        ...rows.filter(row => row.group === group).map(row => {
+                            const before = row.read(current);
+                            const after = row.read(candidateOptimized);
+                            const delta = after - before;
+                            const percent = before === 0 ? (after === 0 ? 0 : 100) : delta / Math.abs(before) * 100;
+                            const tone = delta > 0 ? 'text-emerald-300' : delta < 0 ? 'text-red-300' : 'text-text-muted';
+                            return <tr key={row.label} className="border-t border-border/60">
+                                <td className="p-3 text-text-secondary">{row.label}</td>
+                                <td className="p-3 text-right font-mono text-text-primary">{renderValue(row, before)}</td>
+                                <td className="p-3 text-right font-mono text-text-primary">{renderValue(row, row.read(candidateCurrent))}</td>
+                                <td className="p-3 text-right font-mono text-blue-300">{renderValue(row, after)}</td>
+                                <td className={cn('p-3 text-right font-mono font-bold', tone)}>{renderChange(row)}</td>
+                                <td className={cn('p-3 text-right font-mono font-bold', tone)}>{percent >= 0 ? '+' : ''}{percent.toFixed(2)}%</td>
+                            </tr>;
+                        })
+                    ])}
                 </tbody>
             </table>
         </div>

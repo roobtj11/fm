@@ -328,11 +328,9 @@ export function MountPanel() {
                                     <div key={idx} className={cn("flex justify-between items-center text-[10px] font-mono relative group/mount-details", getStatColor(stat.label))}>
                                         <span className="opacity-70">{getStatName(stat.label)}</span>
                                         <div className="flex items-center gap-1">
-                                            <span className="font-bold">
-                                                {stat.isMultiplier || isFlat ? '+' : ''}
-                                                {isFlat ? formatValue(stat.value) : (stat.isMultiplier ? stat.value * 100 : stat.value).toFixed(1)}
-                                                {stat.isMultiplier ? '%' : ''}
-                                            </span>
+                                            <div className="text-right"><div className="font-bold">
+                                                {stat.isMultiplier || isFlat ? '+' : ''}{isFlat ? formatValue(stat.value) : (stat.isMultiplier ? stat.value * 100 : stat.value).toFixed(1)}{stat.isMultiplier ? '%' : ''}
+                                            </div>{isFlat && <div className="text-[7px] text-text-muted">Lv.{activeMount.level} base {formatValue(stat.baseValue || 0)}</div>}</div>
                                             
                                             {isFlat && (stat.label === 'Damage' || stat.label === 'Health') && (
                                                 <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 w-48 bg-black border border-white/10 rounded-lg p-2 shadow-2xl z-50 hidden group-hover/mount-details:block pointer-events-none backdrop-blur-md">

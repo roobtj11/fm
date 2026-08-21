@@ -59,6 +59,31 @@ export interface AvailableNode {
     sprite_rect: any;
 }
 
+export type PlannerPriority = 'war_points' | 'dps' | 'speed' | 'time';
+
+export interface PlannerPhase {
+    id: string;
+    throughStep: number;
+    focus: PlannerPriority;
+}
+
+export interface AutoPlanOptions {
+    priorityWeights: Record<PlannerPriority, number>;
+    numNodes: number;
+    potionBudget?: number;
+    potionReserve: number;
+    sleepStart: string;
+    sleepEnd: string;
+    maxWaitMinutes: number;
+    minWaitMinutes: number;
+    allowedTrees: string[];
+    treeWeights: Record<string, number>;
+    maxTotalHours: number;
+    maxNodeMinutes: number;
+    levelCaps: Record<string, number>;
+    phases: PlannerPhase[];
+}
+
 
 
 export function useTreePlanner(warBonusOverride?: number, dayBoostOverride?: number) {
@@ -527,21 +552,24 @@ export function useTreePlanner(warBonusOverride?: number, dayBoostOverride?: num
     };
 
     // Auto-Planner: generates an optimized plan queue
-    const autoPlan = useCallback((
-        priorities: Set<string>,
-        numNodes: number = 200,
-        potionBudget?: number,
-        sleepStart: string = profile.misc.plannerSleepStart || '23:00',
-        sleepEnd: string = profile.misc.plannerSleepEnd || '07:00',
-        maxWaitMinutes: number = profile.misc.plannerMaxWait || 120,
-        minWaitMinutes: number = profile.misc.plannerMinWaitBetweenNodes || 1,
-        allowedTrees: string[] = ['Forge', 'Power', 'SkillsPetTech']
-    ) => {
+    const autoPlan = useCallback((options: AutoPlanOptions) => {
         if (!mapping || !techTreeLibrary || !upgradeLibrary) return;
 
-        const budget = potionBudget ?? Infinity;
+        const {
+            priorityWeights, numNodes, potionBudget, potionReserve, sleepStart, sleepEnd,
+            maxWaitMinutes, minWaitMinutes, allowedTrees, treeWeights, maxTotalHours,
+            maxNodeMinutes, levelCaps, phases,
+        } = options;
+        const priorities = new Set(Object.entries(priorityWeights).filter(([, weight]) => weight > 0).map(([key]) => key));
+        const budget = potionBudget === undefined ? Infinity : Math.max(0, potionBudget - potionReserve);
         const startMs = new Date(planStartDate).getTime();
         const onlyTime = priorities.size === 1 && priorities.has('time');
+        const sortedPhases = [...phases].sort((a, b) => a.throughStep - b.throughStep);
+        const weightsForStep = (step: number) => {
+            const phase = sortedPhases.find(item => step <= item.throughStep);
+            if (!phase) return priorityWeights;
+            return { ...priorityWeights, [phase.focus]: Math.max(100, priorityWeights[phase.focus]) };
+        };
 
         // Build virtual tree from profile
         const virtualTree: UserProfile['techTree'] = {
@@ -570,13 +598,17 @@ export function useTreePlanner(warBonusOverride?: number, dayBoostOverride?: num
                 const nodeType = node.type;
                 
                 let bScore = 0;
-                if (priorities.has('dps') && DPS_NODE_TYPES.has(nodeType)) bScore += 5000;
-                if (priorities.has('speed') && SPEED_NODE_TYPES.has(nodeType)) bScore += 5000;
-                if (priorities.has('time')) {
-                    if (nodeType === 'TechResearchTimer') bScore += 10000;
-                    else if (SPEED_NODE_TYPES.has(nodeType)) bScore += 5000;
+                const dpsWeight = priorityWeights.dps / 100;
+                const speedWeight = priorityWeights.speed / 100;
+                const timeWeight = priorityWeights.time / 100;
+                const warWeight = priorityWeights.war_points / 100;
+                if (DPS_NODE_TYPES.has(nodeType)) bScore += 5000 * dpsWeight;
+                if (SPEED_NODE_TYPES.has(nodeType)) bScore += 5000 * speedWeight;
+                if (timeWeight > 0) {
+                    if (nodeType === 'TechResearchTimer') bScore += 10000 * timeWeight;
+                    else if (SPEED_NODE_TYPES.has(nodeType)) bScore += 5000 * timeWeight;
                 }
-                if (priorities.has('war_points')) bScore += (tierPoints[node.tier] || 0) / 10;
+                bScore += ((tierPoints[node.tier] || 0) / 10) * warWeight;
                 
                 nodeBaseScores[treeName][node.id] = bScore;
                 (node.requirements || []).forEach((reqId: number) => {
@@ -615,6 +647,9 @@ export function useTreePlanner(warBonusOverride?: number, dayBoostOverride?: num
         while (iter < numNodes) {
             iter++;
 
+            if (maxTotalHours > 0 && simClockMs - startMs >= maxTotalHours * 3600000) break;
+            const activeWeights = weightsForStep(iter);
+
             const bonuses = calculateTechBonuses(virtualTree);
             const candidates: {
                 step: PlanStep;
@@ -635,8 +670,9 @@ export function useTreePlanner(warBonusOverride?: number, dayBoostOverride?: num
                     const nodeType = node.type;
                     const nodeConfig = techTreeLibrary[nodeType];
                     const maxLvl = nodeConfig?.MaxLevel || 0;
+                    const configuredCap = levelCaps[treeName] || maxLvl;
 
-                    if (currentLvl >= maxLvl) return;
+                    if (currentLvl >= Math.min(maxLvl, configuredCap)) return;
 
                     const reqsMet = (node.requirements || []).every((reqId: number) => {
                         return ((virtualTree as any)[treeName!]?.[reqId] || 0) >= 1;
@@ -650,6 +686,9 @@ export function useTreePlanner(warBonusOverride?: number, dayBoostOverride?: num
 
                     const finalCost = Math.ceil(levelData.Cost * (1 - bonuses.costReduction));
                     const finalDuration = Math.max(1, Math.ceil(levelData.Duration / (1 + bonuses.speedBonus)));
+
+                    if (maxNodeMinutes > 0 && finalDuration / 60 > maxNodeMinutes) return;
+                    if (maxTotalHours > 0 && simClockMs + finalDuration * 1000 - startMs > maxTotalHours * 3600000) return;
 
                     if (totalPotions + finalCost > budget) return;
 
@@ -712,36 +751,39 @@ export function useTreePlanner(warBonusOverride?: number, dayBoostOverride?: num
                     let score = 0;
                     const durationMins = finalDuration / 60;
 
-                    if (priorities.has('war_points')) {
+                    if (activeWeights.war_points > 0) {
                         const isWar = checkWarDay(finishTime);
-                        if (isWar) score += 5000; // Large bonus for war landing
-                        score += (pts / durationMins) * 100;
+                        const weight = activeWeights.war_points / 100;
+                        if (isWar) score += 5000 * weight;
+                        score += (pts / durationMins) * 100 * weight;
                     }
 
-                    if (priorities.has('dps')) {
+                    if (activeWeights.dps > 0) {
                         if (DPS_NODE_TYPES.has(nodeType)) {
-                            score += 2000;
+                            const weight = activeWeights.dps / 100;
+                            score += 2000 * weight;
                             const statWeight = (nodeConfig.Stats?.[0]?.Value || 0.01) * 1000;
-                            score += statWeight / (durationMins / 60);
+                            score += statWeight / (durationMins / 60) * weight;
                         }
                     }
 
-                    if (priorities.has('speed')) {
+                    if (activeWeights.speed > 0) {
                         if (SPEED_NODE_TYPES.has(nodeType)) {
-                            score += 10000; // Research speed always massive
+                            score += 10000 * (activeWeights.speed / 100);
                         }
                     }
 
-                    if (priorities.has('time')) {
+                    if (activeWeights.time > 0) {
+                        const weight = activeWeights.time / 100;
                         // Greedy approach: prioritize nodes that reduce future research time
                         if (nodeType === 'TechResearchTimer') {
-                            score += 50000; // Massively prioritize research speed
+                            score += 50000 * weight;
                         } else if (SPEED_NODE_TYPES.has(nodeType)) {
-                            score += 15000; // Prioritize cost reductions too
+                            score += 15000 * weight;
                         }
                         
                         // Favor short, efficient nodes
-                        score += 5000 / (durationMins || 1);
+                        score += 5000 / (durationMins || 1) * weight;
                     }
 
                     // Sleep efficiency: Prefer nodes that overlap more with sleep
@@ -752,6 +794,9 @@ export function useTreePlanner(warBonusOverride?: number, dayBoostOverride?: num
 
                     // Inherited potential bonus (guides planner through prerequisites)
                     score += (inheritedPotential[treeName]?.[node.id] || 0);
+
+                    // Let users favor one tree without completely excluding the others.
+                    score *= Math.max(0.05, (treeWeights[treeName] ?? 100) / 100);
 
                     // Penalty for waiting (delay)
                     score -= bestDelay * 2;
@@ -796,7 +841,7 @@ export function useTreePlanner(warBonusOverride?: number, dayBoostOverride?: num
         setPlanQueue(newQueue);
         setPlanMetadata({ 
             isAuto: true, 
-            config: { priorities: Array.from(priorities), numNodes, potionBudget, sleepStart, sleepEnd, maxWaitMinutes, minWaitMinutes, allowedTrees } 
+            config: options,
         });
     }, [mapping, techTreeLibrary, upgradeLibrary, treeMode, profile.techTree, profile.misc, tierPoints, calculateTechBonuses, warPointDays, DPS_NODE_TYPES, SPEED_NODE_TYPES, planStartDate, isSleepTime, updateProfile]);
 
