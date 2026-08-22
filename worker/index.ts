@@ -19,7 +19,6 @@ interface D1Database {
 
 interface Env {
     DB: D1Database
-    OPENAI_API_KEY?: string
 }
 
 interface ProfileRow {
@@ -60,62 +59,9 @@ const getUser = (request: Request) => {
     };
 };
 
-const getOutputText = (body: any): string => {
-    if (typeof body?.output_text === 'string') return body.output_text;
-    for (const item of body?.output || []) {
-        for (const content of item?.content || []) {
-            if (typeof content?.text === 'string') return content.text;
-        }
-    }
-    return '';
-};
-
-const companionSchema = {
-    type: 'object', additionalProperties: false,
-    properties: {
-        kind: { type: 'string', enum: ['pet', 'mount'] },
-        name: { type: 'string' }, rarity: { type: 'string' }, level: { type: 'integer', minimum: 1 },
-        damage: { anyOf: [{ type: 'number' }, { type: 'null' }] },
-        health: { anyOf: [{ type: 'number' }, { type: 'null' }] },
-        secondaryStats: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { statId: { type: 'string' }, value: { type: 'number' } }, required: ['statId', 'value'] } },
-        confidence: { type: 'number', minimum: 0, maximum: 1 }, notes: { type: 'string' },
-    },
-    required: ['kind', 'name', 'rarity', 'level', 'damage', 'health', 'secondaryStats', 'confidence', 'notes'],
-};
-
-const importCompanion = async (request: Request, env: Env) => {
-    if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
-    if (!getUser(request)) return json({ error: 'Please sign in to ForgeMaster.' }, 401);
-    if (!env.OPENAI_API_KEY) return json({ error: 'Screenshot recognition is not activated for this site yet. You can still add pets and mounts manually.' }, 503);
-    if (Number(request.headers.get('content-length') || 0) > 14_000_000) return json({ error: 'The screenshot is too large.' }, 413);
-    const input = await request.json().catch(() => null) as { imageDataUrl?: unknown } | null;
-    if (!input || typeof input.imageDataUrl !== 'string' || !/^data:image\/(png|jpeg|webp);base64,/.test(input.imageDataUrl) || input.imageDataUrl.length > 14_000_000) {
-        return json({ error: 'A valid PNG, JPG, or WEBP screenshot is required.' }, 400);
-    }
-    const prompt = `Read this Forge Master game companion detail card. It is exactly one pet or mount. Transcribe the displayed name, rarity, level, base damage, base health, and every percentage secondary stat. Ignore dim cards behind the open detail card. Use these exact statId values when applicable: CriticalChance, CriticalMulti, BlockChance, HealthRegen, LifeSteal, DoubleDamageChance, DamageMulti, MeleeDamageMulti, RangedDamageMulti, AttackSpeed, SkillDamageMulti, SkillCooldownMulti, HealthMulti. Percent values must be returned as displayed percentage numbers (7.91, not 0.0791). If a value is unreadable, explain it in notes and lower confidence. Never invent a stat.`;
-    const response = await fetch('https://api.openai.com/v1/responses', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            model: 'gpt-4.1-mini',
-            input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: input.imageDataUrl, detail: 'high' }] }],
-            text: { format: { type: 'json_schema', name: 'companion_import', strict: true, schema: companionSchema } },
-        }),
-    });
-    const body = await response.json().catch(() => null) as any;
-    if (!response.ok) return json({ error: body?.error?.message || 'The screenshot recognition service is unavailable.' }, 502);
-    try {
-        const result = JSON.parse(getOutputText(body));
-        return json({ result: { ...result, damage: result.damage ?? undefined, health: result.health ?? undefined } });
-    } catch {
-        return json({ error: 'The screenshot was read, but its fields could not be understood. Try a tighter crop.' }, 502);
-    }
-};
-
 const worker = {
     async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
         const url = new URL(request.url);
-        if (url.pathname === '/api/companion-import') return importCompanion(request, env);
         if (url.pathname !== '/api/profile-sync') return new Response('Not found', { status: 404 });
 
         const user = getUser(request);
