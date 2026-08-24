@@ -21,6 +21,7 @@ import type {
     SteppingStoneEntry,
     SteppingStoneOutcome,
     SteppingStonePredictionModel,
+    SteppingStonePredictionScope,
     SteppingStonesTracker,
 } from '../../types/Profile';
 
@@ -28,12 +29,18 @@ const EMPTY_TRACKER: SteppingStonesTracker = {
     attempts: [],
     targetStones: 10,
     predictionModel: 'balanced_bayesian',
+    predictionScope: 'per_stone',
 };
 
 const MODEL_OPTIONS: { id: SteppingStonePredictionModel; label: string; description: string }[] = [
     { id: 'balanced_50', label: 'Balanced 50/50', description: 'Keeps recorded Up and Down choices as even as possible.' },
     { id: 'balanced_bayesian', label: 'Balanced Bayesian', description: 'Explores evenly while evidence is weak, then follows a meaningful edge.' },
     { id: 'best_observed', label: 'Best observed', description: 'Always favors the strongest smoothed historical result.' },
+];
+
+const SCOPE_OPTIONS: { id: SteppingStonePredictionScope; label: string; description: string }[] = [
+    { id: 'whole_run', label: 'Whole run', description: 'Uses one combined Up/Down history from every hop.' },
+    { id: 'per_stone', label: 'Per hop', description: 'Hop 1, Hop 2, and every later hop learn independently.' },
 ];
 
 const newId = (prefix: string) =>
@@ -113,6 +120,7 @@ export default function SteppingStonesTracker() {
     const { profile, updateNestedProfile, exportProfile } = useProfile();
     const tracker = profile.misc.steppingStones ?? EMPTY_TRACKER;
     const predictionModel = tracker.predictionModel ?? 'balanced_bayesian';
+    const predictionScope = tracker.predictionScope ?? 'per_stone';
     const [choice, setChoice] = useState<SteppingStoneChoice | null>(null);
 
     const currentAttempt = tracker.attempts.find(
@@ -183,75 +191,70 @@ export default function SteppingStonesTracker() {
         const stoneStats = stats.perStone[currentStone - 1];
         const upStone = stoneStats?.up ?? getDirectionStats([], 'up');
         const downStone = stoneStats?.down ?? getDirectionStats([], 'down');
-        const stoneSamples = upStone.total + downStone.total;
+        const scopeUp = predictionScope === 'per_stone' ? upStone : stats.up;
+        const scopeDown = predictionScope === 'per_stone' ? downStone : stats.down;
+        const scopeSamples = scopeUp.total + scopeDown.total;
+        const scopeName = predictionScope === 'per_stone' ? `hop ${currentStone}` : 'the whole run';
 
         // Laplace smoothing prevents one lucky result from becoming a 0%/100% prediction.
         const smoothed = (direction: DirectionStats) =>
             (direction.safe + 1) / (direction.total + 2);
-        const stoneWeight = stoneSamples / (stoneSamples + 6);
-        const upScore = (smoothed(upStone) * stoneWeight)
-            + (smoothed(stats.up) * (1 - stoneWeight));
-        const downScore = (smoothed(downStone) * stoneWeight)
-            + (smoothed(stats.down) * (1 - stoneWeight));
+        const upScore = smoothed(scopeUp);
+        const downScore = smoothed(scopeDown);
         const margin = Math.abs(upScore - downScore);
 
         const alternatingPick = (currentStone + tracker.attempts.length) % 2 === 0 ? 'down' : 'up';
-        const lessUsedOverall = stats.up.total === stats.down.total ? alternatingPick : stats.up.total < stats.down.total ? 'up' : 'down';
-        const lessUsedHere = upStone.total === downStone.total ? lessUsedOverall : upStone.total < downStone.total ? 'up' : 'down';
+        const lessUsedInScope = scopeUp.total === scopeDown.total ? alternatingPick : scopeUp.total < scopeDown.total ? 'up' : 'down';
         const observedLeader = margin < 0.001 ? alternatingPick : upScore > downScore ? 'up' : 'down';
-        const strongStoneEvidence = stoneSamples >= 20 && margin >= 0.1;
+        const strongEvidence = scopeSamples >= 20 && margin >= 0.1;
         const suggested: SteppingStoneChoice = predictionModel === 'balanced_50'
-            ? lessUsedOverall
+            ? lessUsedInScope
             : predictionModel === 'best_observed'
                 ? observedLeader
-                : strongStoneEvidence ? observedLeader : lessUsedHere;
+                : strongEvidence ? observedLeader : lessUsedInScope;
 
         if (predictionModel === 'balanced_50') {
             return {
                 choice: suggested,
                 confidence: 'Balanced pick',
-                reason: `This keeps recorded choices close to 50/50. So far you have ${stats.up.total} Up and ${stats.down.total} Down choices.`,
+                reason: `This keeps recorded choices close to 50/50 within ${scopeName}. So far this scope has ${scopeUp.total} Up and ${scopeDown.total} Down choices.`,
             };
         }
 
-        if (allEntries.length === 0) {
+        if (scopeSamples === 0) {
             return {
                 choice: suggested,
                 confidence: 'Balanced pick',
-                reason: 'There is no history yet, so this is a balanced starting pick rather than a prediction.',
+                reason: `There is no history for ${scopeName} yet, so this is a balanced starting pick rather than a prediction.`,
             };
         }
-        if (predictionModel === 'balanced_bayesian' && !strongStoneEvidence) {
+        if (predictionModel === 'balanced_bayesian' && !strongEvidence) {
             return {
                 choice: suggested,
-                confidence: allEntries.length === 0 ? 'Balanced pick' : 'Early signal',
-                reason: stoneSamples > 0
-                    ? `Evidence at stone ${currentStone} is still weak, so this tests the less-used direction here while keeping the history balanced.`
-                    : `Stone ${currentStone} has no results yet, so this keeps exploration close to 50/50.`,
+                confidence: 'Early signal',
+                reason: `Evidence for ${scopeName} is still weak, so this tests the less-used direction in this scope while keeping exploration balanced.`,
             };
         }
-        if (stoneSamples >= 20 && margin >= 0.15) {
+        if (scopeSamples >= 20 && margin >= 0.15) {
             return {
                 choice: suggested,
                 confidence: 'High confidence',
-                reason: `This direction has the stronger smoothed result at stone ${currentStone}, supported by ${stoneSamples} recorded choices here.`,
+                reason: `This direction has the stronger smoothed result for ${scopeName}, supported by ${scopeSamples} recorded choices in this scope.`,
             };
         }
-        if (stoneSamples >= 8 && margin >= 0.08) {
+        if (scopeSamples >= 8 && margin >= 0.08) {
             return {
                 choice: suggested,
                 confidence: 'Medium confidence',
-                reason: `This direction currently performs better at stone ${currentStone}, with the overall history used to steady the estimate.`,
+                reason: `This direction currently has the stronger smoothed result for ${scopeName}.`,
             };
         }
         return {
             choice: suggested,
             confidence: 'Early signal',
-            reason: stoneSamples > 0
-                ? `The sample at stone ${currentStone} is still small, so this combines its results with your overall history.`
-                : `Stone ${currentStone} has no results yet, so this uses your overall history and keeps close calls balanced.`,
+            reason: `The sample for ${scopeName} is still small, so treat this as an early signal.`,
         };
-    }, [allEntries.length, currentStone, predictionModel, stats.down, stats.perStone, stats.up, tracker.attempts.length]);
+    }, [currentStone, predictionModel, predictionScope, stats.down, stats.perStone, stats.up, tracker.attempts.length]);
 
     const startAttempt = () => {
         if (currentAttempt) return;
@@ -338,7 +341,7 @@ export default function SteppingStonesTracker() {
 
     const resetHistory = () => {
         if (!window.confirm('Delete all Stepping Stones attempt history for this profile?')) return;
-        saveTracker({ ...EMPTY_TRACKER, targetStones: tracker.targetStones, predictionModel });
+        saveTracker({ ...EMPTY_TRACKER, targetStones: tracker.targetStones, predictionModel, predictionScope });
         setChoice(null);
         toast.success('Stepping Stones history cleared.');
     };
@@ -375,8 +378,11 @@ export default function SteppingStonesTracker() {
     const apparentLeader = stats.up.successRate > stats.down.successRate ? 'Up' : 'Down';
     const difference = Math.abs(stats.up.successRate - stats.down.successRate);
     const evidenceIsWeak = stats.pValue === null || stats.pValue >= 0.05 || !enoughSamples;
-    const choiceTotal = stats.up.total + stats.down.total;
-    const upChoiceShare = choiceTotal ? stats.up.total / choiceTotal : 0.5;
+    const currentScopeRow = stats.perStone[currentStone - 1];
+    const balanceUp = predictionScope === 'per_stone' ? currentScopeRow?.up ?? getDirectionStats([], 'up') : stats.up;
+    const balanceDown = predictionScope === 'per_stone' ? currentScopeRow?.down ?? getDirectionStats([], 'down') : stats.down;
+    const choiceTotal = balanceUp.total + balanceDown.total;
+    const upChoiceShare = choiceTotal ? balanceUp.total / choiceTotal : 0.5;
 
     return (
         <div className="mx-auto w-full max-w-7xl space-y-6 p-3 sm:p-5 lg:p-7">
@@ -438,8 +444,15 @@ export default function SteppingStonesTracker() {
                         <div className="mt-3 grid gap-2 md:grid-cols-3">
                             {MODEL_OPTIONS.map(model => <button key={model.id} type="button" onClick={() => saveTracker({ ...tracker, predictionModel: model.id })} className={`rounded-xl border p-3 text-left transition ${predictionModel === model.id ? 'border-cyan-400 bg-cyan-500/15' : 'border-slate-700 bg-slate-900/60 hover:border-slate-500'}`}><span className={`block text-sm font-bold ${predictionModel === model.id ? 'text-cyan-200' : 'text-white'}`}>{model.label}</span><span className="mt-1 block text-xs leading-5 text-slate-400">{model.description}</span></button>)}
                         </div>
+                        <div className="mt-4 border-t border-slate-700 pt-4">
+                            <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Calculation scope</h4>
+                            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                {SCOPE_OPTIONS.map(scope => <button key={scope.id} type="button" onClick={() => saveTracker({ ...tracker, predictionScope: scope.id })} className={`rounded-xl border p-3 text-left transition ${predictionScope === scope.id ? 'border-amber-400 bg-amber-500/10' : 'border-slate-700 bg-slate-900/60 hover:border-slate-500'}`}><span className={`block text-sm font-bold ${predictionScope === scope.id ? 'text-amber-200' : 'text-white'}`}>{scope.label}</span><span className="mt-1 block text-xs leading-5 text-slate-400">{scope.description}</span></button>)}
+                            </div>
+                        </div>
                         <div className="mt-4">
-                            <div className="flex justify-between text-xs font-semibold"><span className="text-emerald-300">Up {stats.up.total} · {percent(upChoiceShare)}</span><span className="text-violet-300">Down {stats.down.total} · {percent(1 - upChoiceShare)}</span></div>
+                            <div className="mb-2 text-xs font-semibold text-slate-400">{predictionScope === 'per_stone' ? `Hop ${currentStone} choice balance` : 'Whole-run choice balance'}</div>
+                            <div className="flex justify-between text-xs font-semibold"><span className="text-emerald-300">Up {balanceUp.total} · {percent(upChoiceShare)}</span><span className="text-violet-300">Down {balanceDown.total} · {percent(1 - upChoiceShare)}</span></div>
                             <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-slate-800"><div className="bg-emerald-500 transition-all" style={{ width: `${upChoiceShare * 100}%` }} /><div className="flex-1 bg-violet-500" /></div>
                             <p className="mt-2 text-xs text-slate-500">This balances recorded choices, not successful outcomes. Successes are never intentionally forced to match.</p>
                         </div>

@@ -58,6 +58,7 @@ export interface SkillSlot {
 export type SteppingStoneChoice = 'up' | 'down';
 export type SteppingStoneOutcome = 'safe' | 'fall';
 export type SteppingStonePredictionModel = 'balanced_50' | 'balanced_bayesian' | 'best_observed';
+export type SteppingStonePredictionScope = 'whole_run' | 'per_stone';
 
 export interface SteppingStoneEntry {
     id: string;
@@ -79,6 +80,7 @@ export interface SteppingStonesTracker {
     currentAttemptId?: string;
     targetStones: number;
     predictionModel?: SteppingStonePredictionModel;
+    predictionScope?: SteppingStonePredictionScope;
 }
 
 export interface UserProfile {
