@@ -57,6 +57,7 @@ export interface SkillSlot {
 
 export type SteppingStoneChoice = 'up' | 'down';
 export type SteppingStoneOutcome = 'safe' | 'fall';
+export type SteppingStonePredictionModel = 'balanced_50' | 'balanced_bayesian' | 'best_observed';
 
 export interface SteppingStoneEntry {
     id: string;
@@ -77,6 +78,7 @@ export interface SteppingStonesTracker {
     attempts: SteppingStoneAttempt[];
     currentAttemptId?: string;
     targetStones: number;
+    predictionModel?: SteppingStonePredictionModel;
 }
 
 export interface UserProfile {
