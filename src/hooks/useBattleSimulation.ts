@@ -38,7 +38,7 @@ export function useBattleSimulation() {
     const { data: skillDungeonBattleLibrary, loading: loading8 } = useGameData<any>('SkillDungeonBattleLibrary.json');
     const { data: eggDungeonBattleLibrary, loading: loading9 } = useGameData<any>('EggDungeonBattleLibrary.json');
     const { data: potionDungeonBattleLibrary, loading: loading10 } = useGameData<any>('PotionDungeonBattleLibrary.json');
-    const { data: projectilesLibrary, loading: loading11 } = useGameData<any>('ProjectileLibrary.json');
+    const { data: projectilesLibrary, loading: loading11 } = useGameData<any>('ProjectilesLibrary.json');
     const { data: skillLibrary, loading: loading12 } = useGameData<any>('SkillLibrary.json');
     const { data: skillPassiveLibrary, loading: loading13 } = useGameData<any>('SkillPassiveLibrary.json');
     const { data: dungeonBaseConfig, loading: loading14 } = useGameData<any>('DungeonBaseConfig.json');

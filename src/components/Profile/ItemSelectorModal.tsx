@@ -491,6 +491,8 @@ export function ItemSelectorModal({ isOpen, onClose, onSelect, slot, current, is
 
     const baseStats = useMemo(() => {
         if (!selectedItemData) return { damage: 0, health: 0 };
+        const levelScalingBase = itemBalancingConfig?.LevelScalingBase || 1.01;
+        const levelMultiplier = Math.pow(levelScalingBase, Math.max(0, level - 1));
         const s = (selectedItemData as any).EquipmentStats || [];
         // If it's a saved item (ItemSlot), it doesn't have EquipmentStats directly.
         // We need to fetch base stats from library using its age/idx.
@@ -502,13 +504,13 @@ export function ItemSelectorModal({ isOpen, onClose, onSelect, slot, current, is
             const stats = libItem?.EquipmentStats || [];
             const d = stats.find((x: any) => x.StatNode?.UniqueStat?.StatType === 'Damage')?.Value || 0;
             const h = stats.find((x: any) => x.StatNode?.UniqueStat?.StatType === 'Health')?.Value || 0;
-            return { damage: d, health: h };
+            return { damage: d * levelMultiplier, health: h * levelMultiplier };
         }
 
         const damage = s.find((x: any) => x.StatNode?.UniqueStat?.StatType === 'Damage')?.Value || 0;
         const health = s.find((x: any) => x.StatNode?.UniqueStat?.StatType === 'Health')?.Value || 0;
-        return { damage, health };
-    }, [selectedItemData, ageIdx, itemLibrary, jsonType]);
+        return { damage: damage * levelMultiplier, health: health * levelMultiplier };
+    }, [selectedItemData, ageIdx, itemLibrary, jsonType, itemBalancingConfig, level]);
 
     const numSecondarySlots = useMemo(() => {
         // If the user has at least one forge ascension, all items get 2 secondary stats
