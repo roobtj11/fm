@@ -26,7 +26,110 @@ const BUFF_SKILLS = ["Meat", "Morale", "Berserk", "Buff", "HigherMorale"];
 
 import { DebugConfig } from './BattleEngine';
 
-// ...
+const MAIN_BATTLE_CALIBRATION_FACTOR = 0.02;
+const HARD_DIFFICULTY_MULTIPLIER = 6_000_000;
+
+export interface MainBattleStageSummary {
+    ageIdx: number;
+    battleIdx: number;
+    difficultyMode: number;
+    difficultyIdx: number;
+    waveCount: number;
+    enemyCount: number;
+    averageEnemyHealth: number;
+    maxEnemyHealth: number;
+    averageEnemyDamage: number;
+    maxEnemyDamage: number;
+    totalStageHealth: number;
+    finalWaveHealth: number;
+}
+
+/**
+ * Reads the same main-battle libraries and applies the same enemy scaling used by
+ * Progress Prediction, without running the time-based combat simulation.
+ */
+export function getMainBattleStageSummary(
+    ageIdx: number,
+    battleIdx: number,
+    difficultyMode: number,
+    libs: LibraryData
+): MainBattleStageSummary | null {
+    if (!libs?.mainBattleLibrary || !libs.enemyAgeScalingLibrary || !libs.enemyLibrary) return null;
+
+    const battleKey = `{'AgeIdx': ${ageIdx}, 'BattleIdx': ${battleIdx}}`;
+    const battleConfig: BattleConfig | undefined =
+        libs.mainBattleLookup?.[`${ageIdx}-${battleIdx}`] || libs.mainBattleLibrary[battleKey];
+    const ageScaling = libs.enemyAgeScalingLibrary[String(ageIdx)] || libs.enemyAgeScalingLibrary[ageIdx];
+    if (!battleConfig || !ageScaling) return null;
+
+    const difficultyIdx = calculateProgressDifficultyIdx(
+        ageIdx,
+        battleIdx,
+        difficultyMode,
+        libs.mainBattleLibrary
+    );
+    const difficultyMultiplier = difficultyMode > 0 ? HARD_DIFFICULTY_MULTIPLIER : 1;
+    const enemyRangedMulti = libs.itemBalancingConfig?.EnemyRangedDamageMultiplier || 1;
+
+    let enemyCount = 0;
+    let totalStageHealth = 0;
+    let totalDamage = 0;
+    let maxEnemyHealth = 0;
+    let maxEnemyDamage = 0;
+    let finalWaveHealth = 0;
+
+    battleConfig.Waves.forEach((wave, waveIndex) => {
+        let waveHealth = 0;
+        wave.Enemies.forEach(enemy => {
+            const enemyConfig = libs.enemyLibrary[String(enemy.Id)];
+            if (!enemyConfig) return;
+
+            const weaponKey = enemyConfig.WeaponId
+                ? `{'Age': ${enemyConfig.WeaponId.Age}, 'Type': 'Weapon', 'Idx': ${enemyConfig.WeaponId.Idx}}`
+                : null;
+            const weaponInfo = weaponKey && libs.weaponLibrary ? libs.weaponLibrary[weaponKey] : null;
+            const health = calculateEnemyHp(
+                difficultyIdx,
+                ageScaling,
+                libs.mainBattleConfig,
+                weaponInfo,
+                libs
+            ) * difficultyMultiplier * MAIN_BATTLE_CALIBRATION_FACTOR;
+            const damage = calculateEnemyDmg(
+                difficultyIdx,
+                ageScaling,
+                libs.mainBattleConfig,
+                weaponInfo,
+                enemyRangedMulti,
+                libs
+            ) * difficultyMultiplier * MAIN_BATTLE_CALIBRATION_FACTOR;
+            const count = Math.max(0, enemy.Count || 0);
+
+            enemyCount += count;
+            waveHealth += health * count;
+            totalStageHealth += health * count;
+            totalDamage += damage * count;
+            maxEnemyHealth = Math.max(maxEnemyHealth, health);
+            maxEnemyDamage = Math.max(maxEnemyDamage, damage);
+        });
+        if (waveIndex === battleConfig.Waves.length - 1) finalWaveHealth = waveHealth;
+    });
+
+    return {
+        ageIdx,
+        battleIdx,
+        difficultyMode,
+        difficultyIdx,
+        waveCount: battleConfig.Waves.length,
+        enemyCount,
+        averageEnemyHealth: enemyCount ? totalStageHealth / enemyCount : 0,
+        maxEnemyHealth,
+        averageEnemyDamage: enemyCount ? totalDamage / enemyCount : 0,
+        maxEnemyDamage,
+        totalStageHealth,
+        finalWaveHealth
+    };
+}
 
 export function simulateBattle(
     playerStats: AggregatedStats,
@@ -70,10 +173,7 @@ export function simulateBattle(
     // Calculate progress difficulty index
     const progressDifficultyIdx = calculateProgressDifficultyIdx(ageIdx, battleIdx, difficultyMode, libs.mainBattleLibrary);
 
-    let difficultyMultiplier = 1.0;
-    if (difficultyMode > 0) {
-        difficultyMultiplier = 6000000.0;
-    }
+    const difficultyMultiplier = difficultyMode > 0 ? HARD_DIFFICULTY_MULTIPLIER : 1;
 
     // Intra-Age Scaling
     const battleScaling = 1.0;
@@ -205,9 +305,8 @@ export function simulateBattle(
             const ageDmg = calculateEnemyDmg(progressDifficultyIdx, ageScaling, libs.mainBattleConfig, weaponInfo, enemyRangedMulti, libs);
 
             // Calibration & Multipliers
-            const CALIBRATION_FACTOR = 0.02;
-            const enemyHp = ageHp * battleScaling * difficultyMultiplier * CALIBRATION_FACTOR;
-            const enemyDmg = ageDmg * battleScaling * difficultyMultiplier * CALIBRATION_FACTOR;
+            const enemyHp = ageHp * battleScaling * difficultyMultiplier * MAIN_BATTLE_CALIBRATION_FACTOR;
+            const enemyDmg = ageDmg * battleScaling * difficultyMultiplier * MAIN_BATTLE_CALIBRATION_FACTOR;
 
             const isRanged = !!(weaponInfo && (weaponInfo.AttackRange ?? 0) > 1.0);
 

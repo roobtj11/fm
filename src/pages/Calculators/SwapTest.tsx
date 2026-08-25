@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'react-toastify';
 import {
     ArrowRightLeft, Calculator, Check, PackagePlus, PawPrint, RotateCcw,
@@ -7,6 +7,7 @@ import {
 import { useProfile } from '../../context/ProfileContext';
 import { useProfileOptimizer } from '../../hooks/useProfileOptimizer';
 import { useGameData } from '../../hooks/useGameData';
+import { useBattleSimulation } from '../../hooks/useBattleSimulation';
 import { ItemSelectorModal } from '../../components/Profile/ItemSelectorModal';
 import { PetSelectorModal } from '../../components/Profile/PetSelectorModal';
 import { MountSelectorModal } from '../../components/Profile/MountSelectorModal';
@@ -16,6 +17,7 @@ import { AggregatedStats } from '../../utils/statEngine';
 import { AGES, MAX_ACTIVE_PETS } from '../../utils/constants';
 import { formatNumber } from '../../utils/format';
 import { formatSecondaryStat } from '../../utils/statNames';
+import { getMainBattleStageSummary } from '../../utils/BattleSimulator';
 import { cn } from '../../lib/utils';
 
 type EquipmentSlot = keyof UserProfile['items'];
@@ -116,6 +118,12 @@ export default function SwapTest() {
     const { profile, updateNestedProfile } = useProfile();
     const { optimizeLoadout, calculateProfileStats, isReady } = useProfileOptimizer();
     const { data: petLibrary } = useGameData<any>('PetLibrary.json');
+    const {
+        libs: battleLibs,
+        getBattleCountForAge,
+        maxAgeIdx,
+        isLoading: battleDataLoading
+    } = useBattleSimulation();
 
     const [slot, setSlot] = useState<EquipmentSlot>('Weapon');
     const [candidate, setCandidate] = useState<ItemSlot | null>(null);
@@ -123,6 +131,10 @@ export default function SwapTest() {
     const [enemyHealth, setEnemyHealth] = useState(1_000_000);
     const [bossHealth, setBossHealth] = useState(10_000_000);
     const [overheadSeconds, setOverheadSeconds] = useState(0.35);
+    const [stageDifficulty, setStageDifficulty] = useState(0);
+    const [stageAge, setStageAge] = useState(0);
+    const [stageBattle, setStageBattle] = useState(0);
+    const [autoStageStats, setAutoStageStats] = useState(true);
     const [respectSavedLevels, setRespectSavedLevels] = useState(true);
     const [result, setResult] = useState<SwapResult | null>(null);
     const [itemModalOpen, setItemModalOpen] = useState(false);
@@ -132,6 +144,21 @@ export default function SwapTest() {
     const currentItem = profile.items[slot];
     const savedPets = profile.pets.savedBuilds || [];
     const savedMounts = profile.mount.savedBuilds || [];
+    const battleCount = getBattleCountForAge(stageAge);
+    const stageSummary = useMemo(
+        () => getMainBattleStageSummary(stageAge, stageBattle, stageDifficulty, battleLibs),
+        [stageAge, stageBattle, stageDifficulty, battleLibs]
+    );
+
+    useEffect(() => {
+        if (stageBattle >= battleCount) setStageBattle(Math.max(0, battleCount - 1));
+    }, [stageBattle, battleCount]);
+
+    useEffect(() => {
+        if (!autoStageStats || !stageSummary) return;
+        setEnemyHealth(Math.round(stageSummary.averageEnemyHealth));
+        setBossHealth(Math.round(stageSummary.finalWaveHealth));
+    }, [autoStageStats, stageSummary]);
 
     const petName = (pet: PetSlot) => {
         const key = `{'Rarity': '${pet.rarity}', 'Id': ${pet.id}}`;
@@ -192,8 +219,10 @@ export default function SwapTest() {
     const resetTest = () => {
         setCandidate(null);
         setResult(null);
-        setEnemyHealth(1_000_000);
-        setBossHealth(10_000_000);
+        setStageDifficulty(0);
+        setStageAge(0);
+        setStageBattle(0);
+        setAutoStageStats(true);
         setOverheadSeconds(0.35);
     };
 
@@ -373,9 +402,84 @@ export default function SwapTest() {
                     ))}
                 </div>
 
+                <div className="rounded-xl border border-border bg-bg-primary/30 p-4 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div>
+                            <div className="text-sm font-bold text-text-primary">Main Battle stage</div>
+                            <p className="text-xs text-text-muted mt-1">
+                                Uses the exact Main Battle configuration and enemy scaling from Progress Prediction.
+                            </p>
+                        </div>
+                        <button
+                            onClick={() => setAutoStageStats(value => !value)}
+                            className={cn(
+                                'rounded-lg border px-3 py-2 text-xs font-semibold transition-colors',
+                                autoStageStats
+                                    ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
+                                    : 'border-border text-text-secondary'
+                            )}
+                        >
+                            Auto-fill: {autoStageStats ? 'On' : 'Manual override'}
+                        </button>
+                    </div>
+
+                    <div className="grid sm:grid-cols-3 gap-3">
+                        <label className="space-y-1">
+                            <span className="text-xs text-text-muted">Difficulty</span>
+                            <select
+                                value={stageDifficulty}
+                                onChange={event => setStageDifficulty(Number(event.target.value))}
+                                className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                            >
+                                <option value={0}>Normal</option>
+                                <option value={1}>Hard</option>
+                            </select>
+                        </label>
+                        <label className="space-y-1">
+                            <span className="text-xs text-text-muted">Age</span>
+                            <select
+                                value={stageAge}
+                                onChange={event => { setStageAge(Number(event.target.value)); setStageBattle(0); }}
+                                className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                            >
+                                {Array.from({ length: maxAgeIdx + 1 }, (_, age) => (
+                                    <option key={age} value={age}>Age {age + 1}{AGES[age] ? ` · ${AGES[age]}` : ''}</option>
+                                ))}
+                            </select>
+                        </label>
+                        <label className="space-y-1">
+                            <span className="text-xs text-text-muted">Stage</span>
+                            <select
+                                value={stageBattle}
+                                onChange={event => setStageBattle(Number(event.target.value))}
+                                className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                            >
+                                {Array.from({ length: battleCount }, (_, battle) => (
+                                    <option key={battle} value={battle}>Stage {battle + 1}</option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
+
+                    {stageSummary ? (
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+                            <StageFact label="Average enemy HP" value={formatNumber(stageSummary.averageEnemyHealth)} />
+                            <StageFact label="Final wave HP" value={formatNumber(stageSummary.finalWaveHealth)} />
+                            <StageFact label="Total stage HP" value={formatNumber(stageSummary.totalStageHealth)} />
+                            <StageFact label="Average enemy hit" value={formatNumber(stageSummary.averageEnemyDamage)} />
+                            <StageFact label="Strongest enemy hit" value={formatNumber(stageSummary.maxEnemyDamage)} />
+                            <StageFact label="Stage size" value={`${stageSummary.enemyCount} enemies · ${stageSummary.waveCount} waves`} />
+                        </div>
+                    ) : (
+                        <div className="text-xs text-text-muted">
+                            {battleDataLoading ? 'Loading Main Battle stage data…' : 'No Main Battle data was found for this stage.'}
+                        </div>
+                    )}
+                </div>
+
                 <div className="grid sm:grid-cols-3 gap-3">
-                    <NumberField label="Normal enemy health" value={enemyHealth} onChange={setEnemyHealth} />
-                    <NumberField label="Boss health" value={bossHealth} onChange={setBossHealth} />
+                    <NumberField label="Average enemy health" value={enemyHealth} onChange={value => { setEnemyHealth(value); setAutoStageStats(false); }} />
+                    <NumberField label="Boss / final wave health" value={bossHealth} onChange={value => { setBossHealth(value); setAutoStageStats(false); }} />
                     <NumberField label="Time between kills (sec)" value={overheadSeconds} onChange={setOverheadSeconds} step="0.05" />
                 </div>
 
@@ -590,6 +694,15 @@ function MetricCard({
                 <div><span className="text-text-muted">DPS</span><div className="font-mono text-orange-300">{formatNumber(stats.realTotalDps)}</div></div>
                 <div><span className="text-text-muted">HPS</span><div className="font-mono text-emerald-300">{formatNumber(stats.realTotalHps)}</div></div>
             </div>
+        </div>
+    );
+}
+
+function StageFact({ label, value }: { label: string; value: string }) {
+    return (
+        <div className="rounded-lg border border-border/70 bg-bg-input/30 p-3">
+            <div className="text-[10px] uppercase tracking-wide text-text-muted">{label}</div>
+            <div className="mt-1 text-sm font-bold text-text-primary">{value}</div>
         </div>
     );
 }
