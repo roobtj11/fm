@@ -36,7 +36,7 @@ export function PetCollection() {
         title="My Pets"
         description="Keep every pet roll in one account-saved collection. Your optimizer uses these saved pets when it searches for the best loadout."
         entries={profile.pets.savedBuilds}
-        activeKeys={new Set(profile.pets.active.map(p => p.instanceId || `${p.rarity}-${p.id}-${p.level}`))}
+        activeEntries={profile.pets.active}
         onAdd={() => { setEditingIndex(null); setModalOpen(true); }}
         onEdit={index => { setEditingIndex(index); setModalOpen(true); }}
         onDelete={index => updateNestedProfile('pets', { savedBuilds: profile.pets.savedBuilds.filter((_, i) => i !== index) })}
@@ -86,7 +86,7 @@ export function MountCollection() {
         title="My Mounts"
         description="Store all of your mount rolls here. They save with your account and are available to the loadout optimizer."
         entries={profile.mount.savedBuilds}
-        activeKeys={new Set(active ? [active.instanceId || `${active.rarity}-${active.id}-${active.level}`] : [])}
+        activeEntries={active ? [active] : []}
         onAdd={() => { setEditingIndex(null); setModalOpen(true); }}
         onEdit={index => { setEditingIndex(index); setModalOpen(true); }}
         onDelete={index => updateNestedProfile('mount', { savedBuilds: profile.mount.savedBuilds.filter((_, i) => i !== index) })}
@@ -102,8 +102,8 @@ export function MountCollection() {
     </CollectionPage>;
 }
 
-function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, onEdit, onDelete, onEquip, children }: {
-    kind: 'pet' | 'mount'; title: string; description: string; entries: (PetSlot | MountSlot)[]; activeKeys: Set<string>;
+function CollectionPage({ kind, title, description, entries, activeEntries, onAdd, onEdit, onDelete, onEquip, children }: {
+    kind: 'pet' | 'mount'; title: string; description: string; entries: (PetSlot | MountSlot)[]; activeEntries: (PetSlot | MountSlot)[];
     onAdd: () => void; onEdit: (index: number) => void; onDelete: (index: number) => void; onEquip: (index: number) => void; children: ReactNode;
 }) {
     const [search, setSearch] = useState('');
@@ -111,6 +111,7 @@ function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, 
     const [sortDescending, setSortDescending] = useState(true);
     const [sortStat, setSortStat] = useState('');
     const [filterStat, setFilterStat] = useState('');
+    const [filterRarities, setFilterRarities] = useState<string[]>([]);
     const [minimumLevel, setMinimumLevel] = useState(0);
     const [maximumLevel, setMaximumLevel] = useState(0);
     const { selectedVersion } = useGameDataContext();
@@ -122,17 +123,46 @@ function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, 
         entries.forEach(entry => entry.secondaryStats?.forEach(stat => ids.add(stat.statId)));
         return Array.from(ids).sort((a, b) => getStatName(a).localeCompare(getStatName(b)));
     }, [entries, secondaryStatLibrary]);
+    const rarityOptions = useMemo(() => {
+        const order = ['Common', 'Rare', 'Epic', 'Legendary', 'Ultimate', 'Mythic', 'Quantum'];
+        return Array.from(new Set(entries.map(entry => entry.rarity))).sort((a, b) => {
+            const aIndex = order.indexOf(a);
+            const bIndex = order.indexOf(b);
+            return (aIndex < 0 ? order.length : aIndex) - (bIndex < 0 ? order.length : bIndex) || a.localeCompare(b);
+        });
+    }, [entries]);
     const selectedSortStat = sortStat || statOptions[0] || '';
     const statValue = (entry: PetSlot | MountSlot, statId: string) => entry.secondaryStats?.find(stat => stat.statId === statId)?.value ?? -1;
+    const activeIndexes = useMemo(() => {
+        const matched = new Set<number>();
+        activeEntries.forEach(activeEntry => {
+            const index = entries.findIndex((entry, entryIndex) => {
+                if (matched.has(entryIndex)) return false;
+                if (activeEntry.instanceId) return entry.instanceId === activeEntry.instanceId;
+                return entry === activeEntry || (
+                    entry.rarity === activeEntry.rarity
+                    && entry.id === activeEntry.id
+                    && entry.level === activeEntry.level
+                    && JSON.stringify(entry.secondaryStats || []) === JSON.stringify(activeEntry.secondaryStats || [])
+                );
+            });
+            if (index >= 0) matched.add(index);
+        });
+        return matched;
+    }, [entries, activeEntries]);
     const visible = useMemo(() => entries.map((entry, index) => ({ entry, index })).filter(({ entry }) => {
         const info = Object.values(mapping?.mapping || {}).find((value: any) => value.id === entry.id && value.rarity === entry.rarity) as any;
         const matchesSearch = `${entry.customName || ''} ${info?.name || ''} ${entry.rarity}`.toLowerCase().includes(search.toLowerCase());
-        return matchesSearch && entry.level >= minimumLevel && (!maximumLevel || entry.level <= maximumLevel) && (!filterStat || statValue(entry, filterStat) >= 0);
+        return matchesSearch
+            && entry.level >= minimumLevel
+            && (!maximumLevel || entry.level <= maximumLevel)
+            && (!filterStat || statValue(entry, filterStat) >= 0)
+            && (filterRarities.length === 0 || filterRarities.includes(entry.rarity));
     }).sort((a, b) => {
         const aValue = sortBy === 'level' ? a.entry.level : sortBy === 'stat' ? statValue(a.entry, selectedSortStat) : (getPerfection(a.entry as any, secondaryStatLibrary) ?? -1);
         const bValue = sortBy === 'level' ? b.entry.level : sortBy === 'stat' ? statValue(b.entry, selectedSortStat) : (getPerfection(b.entry as any, secondaryStatLibrary) ?? -1);
         return (aValue - bValue) * (sortDescending ? -1 : 1);
-    }), [entries, mapping, search, minimumLevel, maximumLevel, filterStat, sortBy, selectedSortStat, sortDescending, secondaryStatLibrary]);
+    }), [entries, mapping, search, minimumLevel, maximumLevel, filterStat, filterRarities, sortBy, selectedSortStat, sortDescending, secondaryStatLibrary]);
 
     const mergeMaterialIndexes = useMemo(() => {
         const groups = new Map<string, number[]>();
@@ -142,22 +172,26 @@ function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, 
         });
         const marked = new Set<number>();
         groups.forEach(indices => {
-            if (indices.length < 2) return;
-            const inactive = indices.filter(index => {
-                const entry = entries[index];
-                const key = entry.instanceId || `${entry.rarity}-${entry.id}-${entry.level}`;
-                return !activeKeys.has(key);
+            const requiredBetterCopies = kind === 'pet' ? 3 : 1;
+            if (indices.length <= requiredBetterCopies) return;
+            indices.forEach(index => {
+                if (activeIndexes.has(index)) return;
+                const candidate = entries[index];
+                const dominatesCandidate = (other: PetSlot | MountSlot) => {
+                    if (other.level < candidate.level) return false;
+                    if ((other.evolution || 0) < (candidate.evolution || 0)) return false;
+                    if ((other.ascensionLevel || 0) < (candidate.ascensionLevel || 0)) return false;
+                    return (candidate.secondaryStats || []).every(candidateStat => {
+                        const otherValue = other.secondaryStats?.find(stat => stat.statId === candidateStat.statId)?.value;
+                        return otherValue !== undefined && otherValue >= candidateStat.value;
+                    });
+                };
+                const betterCopies = indices.filter(otherIndex => otherIndex !== index && dominatesCandidate(entries[otherIndex])).length;
+                if (betterCopies >= requiredBetterCopies) marked.add(index);
             });
-            const activeCount = indices.length - inactive.length;
-            const keepInactive = activeCount === 0 ? 1 : 0;
-            inactive.sort((a, b) => {
-                const perfectionGap = (getPerfection(entries[b] as any, secondaryStatLibrary) ?? -1) - (getPerfection(entries[a] as any, secondaryStatLibrary) ?? -1);
-                return perfectionGap || entries[b].level - entries[a].level || (entries[b].evolution || 0) - (entries[a].evolution || 0);
-            });
-            inactive.slice(keepInactive).forEach(index => marked.add(index));
         });
         return marked;
-    }, [entries, activeKeys, secondaryStatLibrary]);
+    }, [entries, activeIndexes, kind]);
 
     const Icon = kind === 'pet' ? Cat : Star;
     return <div className="mx-auto max-w-6xl space-y-6 pb-20">
@@ -168,12 +202,26 @@ function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, 
         <div className="grid gap-3 rounded-xl border border-border bg-bg-card/60 p-3 sm:grid-cols-2 lg:grid-cols-6">
             <span className="text-sm font-bold text-text-secondary">{entries.length} saved {entries.length === 1 ? kind : `${kind}s`}</span>
             <label className="relative lg:col-span-2"><Search className="absolute left-3 top-2.5 h-4 w-4 text-text-muted" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${kind}s`} className="w-full rounded-lg border border-border bg-bg-input py-2 pl-9 pr-3 text-sm text-text-primary outline-none focus:border-accent-primary" /></label>
-            <select aria-label="Sort companions" value={sortBy} onChange={e => setSortBy(e.target.value as CollectionSort)} className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary"><option value="perfection">Sort: Perfection</option><option value="level">Sort: Level</option><option value="stat">Sort: Stat value</option></select>
+            <select aria-label="Sort companions" value={sortBy === 'stat' ? 'perfection' : sortBy} onChange={e => { setSortBy(e.target.value as CollectionSort); setSortStat(''); }} className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary"><option value="perfection">Sort: Perfection</option><option value="level">Sort: Level</option></select>
             <button type="button" onClick={() => setSortDescending(value => !value)} className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm font-bold text-text-secondary hover:text-text-primary">{sortDescending ? 'Highest first' : 'Lowest first'}</button>
             <input aria-label="Minimum companion level" type="number" min="0" value={minimumLevel || ''} onChange={e => setMinimumLevel(Math.max(0, Number(e.target.value) || 0))} placeholder="Minimum level" className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary" />
             <input aria-label="Maximum companion level" type="number" min="0" value={maximumLevel || ''} onChange={e => setMaximumLevel(Math.max(0, Number(e.target.value) || 0))} placeholder="Maximum level" className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary" />
-            {sortBy === 'stat' && <select aria-label="Stat to sort by" value={selectedSortStat} onChange={e => setSortStat(e.target.value)} className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary"><option value="" disabled>Sort stat</option>{statOptions.map(stat => <option key={stat} value={stat}>{getStatName(stat)}</option>)}</select>}
             <select aria-label="Filter companions by stat" value={filterStat} onChange={e => setFilterStat(e.target.value)} className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary"><option value="">All stats</option>{statOptions.map(stat => <option key={stat} value={stat}>Has {getStatName(stat)}</option>)}</select>
+            <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-6">
+                <span className="text-[10px] font-black uppercase tracking-wider text-text-muted">Sort by stat</span>
+                {statOptions.map(stat => {
+                    const active = sortBy === 'stat' && selectedSortStat === stat;
+                    return <button key={stat} type="button" aria-pressed={active} onClick={() => { if (active) { setSortBy('perfection'); setSortStat(''); } else { setSortBy('stat'); setSortStat(stat); } }} className={`rounded-full border px-2.5 py-1 text-[11px] font-bold transition-colors ${active ? 'border-accent-primary bg-accent-primary/20 text-accent-primary' : 'border-border bg-bg-input text-text-secondary hover:text-text-primary'}`}>{getStatName(stat)}</button>;
+                })}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-6">
+                <span className="text-[10px] font-black uppercase tracking-wider text-text-muted">Rarity filter</span>
+                {rarityOptions.map(rarity => {
+                    const active = filterRarities.includes(rarity);
+                    return <button key={rarity} type="button" aria-pressed={active} onClick={() => setFilterRarities(current => active ? current.filter(value => value !== rarity) : [...current, rarity])} className={`rounded-full border px-2.5 py-1 text-[11px] font-bold transition-colors ${active ? 'border-amber-400 bg-amber-400/15 text-amber-300' : 'border-border bg-bg-input text-text-secondary hover:text-text-primary'}`}>{rarity}</button>;
+                })}
+                {filterRarities.length > 0 && <button type="button" onClick={() => setFilterRarities([])} className="px-2 py-1 text-[11px] font-bold text-text-muted hover:text-text-primary">Clear</button>}
+            </div>
         </div>
         {visible.length === 0 ? <div className="rounded-2xl border border-dashed border-border bg-bg-card/40 px-6 py-16 text-center"><Icon className="mx-auto h-10 w-10 text-text-muted" /><h2 className="mt-4 font-black text-text-primary">{entries.length ? 'No matches' : `No ${kind}s saved yet`}</h2><p className="mt-2 text-sm text-text-muted">Use “Add {kind}” to record its level and secondary-stat rolls.</p></div> :
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{visible.map(({ entry, index }) => {
@@ -181,7 +229,7 @@ function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, 
                 const spriteIndex = infoEntry ? Number(infoEntry[0]) : -1;
                 const info = infoEntry?.[1] as any;
                 const key = entry.instanceId || `${entry.rarity}-${entry.id}-${entry.level}`;
-                const active = activeKeys.has(key);
+                const active = activeIndexes.has(index);
                 const perfection = getPerfection(entry as any, secondaryStatLibrary);
                 const mergeMaterial = mergeMaterialIndexes.has(index);
                 return <article key={`${key}-${index}`} className={`rounded-2xl border p-4 ${active ? 'border-emerald-500/60 bg-emerald-950/15' : mergeMaterial ? 'border-red-500/70 bg-red-950/15' : 'border-border bg-bg-card/70'}`}>
