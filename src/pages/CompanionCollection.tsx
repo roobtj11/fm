@@ -13,6 +13,7 @@ import { PerfectionMeter } from '../components/UI/PerfectionMeter';
 import type { MountSlot, PetSlot } from '../types/Profile';
 
 const makeId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+type CollectionSort = 'level' | 'perfection' | 'stat';
 
 export function PetCollection() {
     const { profile, updateNestedProfile } = useProfile();
@@ -106,14 +107,57 @@ function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, 
     onAdd: () => void; onEdit: (index: number) => void; onDelete: (index: number) => void; onEquip: (index: number) => void; children: ReactNode;
 }) {
     const [search, setSearch] = useState('');
+    const [sortBy, setSortBy] = useState<CollectionSort>('perfection');
+    const [sortDescending, setSortDescending] = useState(true);
+    const [sortStat, setSortStat] = useState('');
+    const [filterStat, setFilterStat] = useState('');
+    const [minimumLevel, setMinimumLevel] = useState(0);
+    const [maximumLevel, setMaximumLevel] = useState(0);
     const { selectedVersion } = useGameDataContext();
     const { data: spriteMapping } = useGameData<any>('ManualSpriteMapping.json');
     const { data: secondaryStatLibrary } = useGameData<any>('SecondaryStatLibrary.json');
     const mapping = kind === 'pet' ? spriteMapping?.pets : spriteMapping?.mounts;
+    const statOptions = useMemo(() => {
+        const ids = new Set<string>(Object.keys(secondaryStatLibrary || {}));
+        entries.forEach(entry => entry.secondaryStats?.forEach(stat => ids.add(stat.statId)));
+        return Array.from(ids).sort((a, b) => getStatName(a).localeCompare(getStatName(b)));
+    }, [entries, secondaryStatLibrary]);
+    const selectedSortStat = sortStat || statOptions[0] || '';
+    const statValue = (entry: PetSlot | MountSlot, statId: string) => entry.secondaryStats?.find(stat => stat.statId === statId)?.value ?? -1;
     const visible = useMemo(() => entries.map((entry, index) => ({ entry, index })).filter(({ entry }) => {
         const info = Object.values(mapping?.mapping || {}).find((value: any) => value.id === entry.id && value.rarity === entry.rarity) as any;
-        return `${entry.customName || ''} ${info?.name || ''} ${entry.rarity}`.toLowerCase().includes(search.toLowerCase());
-    }), [entries, mapping, search]);
+        const matchesSearch = `${entry.customName || ''} ${info?.name || ''} ${entry.rarity}`.toLowerCase().includes(search.toLowerCase());
+        return matchesSearch && entry.level >= minimumLevel && (!maximumLevel || entry.level <= maximumLevel) && (!filterStat || statValue(entry, filterStat) >= 0);
+    }).sort((a, b) => {
+        const aValue = sortBy === 'level' ? a.entry.level : sortBy === 'stat' ? statValue(a.entry, selectedSortStat) : (getPerfection(a.entry as any, secondaryStatLibrary) ?? -1);
+        const bValue = sortBy === 'level' ? b.entry.level : sortBy === 'stat' ? statValue(b.entry, selectedSortStat) : (getPerfection(b.entry as any, secondaryStatLibrary) ?? -1);
+        return (aValue - bValue) * (sortDescending ? -1 : 1);
+    }), [entries, mapping, search, minimumLevel, maximumLevel, filterStat, sortBy, selectedSortStat, sortDescending, secondaryStatLibrary]);
+
+    const mergeMaterialIndexes = useMemo(() => {
+        const groups = new Map<string, number[]>();
+        entries.forEach((entry, index) => {
+            const duplicateKey = `${entry.rarity}|${entry.id}`;
+            groups.set(duplicateKey, [...(groups.get(duplicateKey) || []), index]);
+        });
+        const marked = new Set<number>();
+        groups.forEach(indices => {
+            if (indices.length < 2) return;
+            const inactive = indices.filter(index => {
+                const entry = entries[index];
+                const key = entry.instanceId || `${entry.rarity}-${entry.id}-${entry.level}`;
+                return !activeKeys.has(key);
+            });
+            const activeCount = indices.length - inactive.length;
+            const keepInactive = activeCount === 0 ? 1 : 0;
+            inactive.sort((a, b) => {
+                const perfectionGap = (getPerfection(entries[b] as any, secondaryStatLibrary) ?? -1) - (getPerfection(entries[a] as any, secondaryStatLibrary) ?? -1);
+                return perfectionGap || entries[b].level - entries[a].level || (entries[b].evolution || 0) - (entries[a].evolution || 0);
+            });
+            inactive.slice(keepInactive).forEach(index => marked.add(index));
+        });
+        return marked;
+    }, [entries, activeKeys, secondaryStatLibrary]);
 
     const Icon = kind === 'pet' ? Cat : Star;
     return <div className="mx-auto max-w-6xl space-y-6 pb-20">
@@ -121,9 +165,15 @@ function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, 
             <div><h1 className="flex items-center gap-3 text-3xl font-black text-text-primary"><Icon className="h-8 w-8 text-amber-400" />{title}</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">{description}</p></div>
             <button type="button" onClick={onAdd} className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent-primary px-4 py-2.5 font-bold text-white shadow-lg hover:brightness-110"><Plus className="h-4 w-4" /> Add {kind}</button>
         </header>
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-bg-card/60 p-3">
+        <div className="grid gap-3 rounded-xl border border-border bg-bg-card/60 p-3 sm:grid-cols-2 lg:grid-cols-6">
             <span className="text-sm font-bold text-text-secondary">{entries.length} saved {entries.length === 1 ? kind : `${kind}s`}</span>
-            <label className="relative w-full sm:w-72"><Search className="absolute left-3 top-2.5 h-4 w-4 text-text-muted" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${kind}s`} className="w-full rounded-lg border border-border bg-bg-input py-2 pl-9 pr-3 text-sm text-text-primary outline-none focus:border-accent-primary" /></label>
+            <label className="relative lg:col-span-2"><Search className="absolute left-3 top-2.5 h-4 w-4 text-text-muted" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${kind}s`} className="w-full rounded-lg border border-border bg-bg-input py-2 pl-9 pr-3 text-sm text-text-primary outline-none focus:border-accent-primary" /></label>
+            <select aria-label="Sort companions" value={sortBy} onChange={e => setSortBy(e.target.value as CollectionSort)} className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary"><option value="perfection">Sort: Perfection</option><option value="level">Sort: Level</option><option value="stat">Sort: Stat value</option></select>
+            <button type="button" onClick={() => setSortDescending(value => !value)} className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm font-bold text-text-secondary hover:text-text-primary">{sortDescending ? 'Highest first' : 'Lowest first'}</button>
+            <input aria-label="Minimum companion level" type="number" min="0" value={minimumLevel || ''} onChange={e => setMinimumLevel(Math.max(0, Number(e.target.value) || 0))} placeholder="Minimum level" className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary" />
+            <input aria-label="Maximum companion level" type="number" min="0" value={maximumLevel || ''} onChange={e => setMaximumLevel(Math.max(0, Number(e.target.value) || 0))} placeholder="Maximum level" className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary" />
+            {sortBy === 'stat' && <select aria-label="Stat to sort by" value={selectedSortStat} onChange={e => setSortStat(e.target.value)} className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary"><option value="" disabled>Sort stat</option>{statOptions.map(stat => <option key={stat} value={stat}>{getStatName(stat)}</option>)}</select>}
+            <select aria-label="Filter companions by stat" value={filterStat} onChange={e => setFilterStat(e.target.value)} className="rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary"><option value="">All stats</option>{statOptions.map(stat => <option key={stat} value={stat}>Has {getStatName(stat)}</option>)}</select>
         </div>
         {visible.length === 0 ? <div className="rounded-2xl border border-dashed border-border bg-bg-card/40 px-6 py-16 text-center"><Icon className="mx-auto h-10 w-10 text-text-muted" /><h2 className="mt-4 font-black text-text-primary">{entries.length ? 'No matches' : `No ${kind}s saved yet`}</h2><p className="mt-2 text-sm text-text-muted">Use “Add {kind}” to record its level and secondary-stat rolls.</p></div> :
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{visible.map(({ entry, index }) => {
@@ -133,10 +183,11 @@ function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, 
                 const key = entry.instanceId || `${entry.rarity}-${entry.id}-${entry.level}`;
                 const active = activeKeys.has(key);
                 const perfection = getPerfection(entry as any, secondaryStatLibrary);
-                return <article key={`${key}-${index}`} className={`rounded-2xl border p-4 ${active ? 'border-emerald-500/60 bg-emerald-950/15' : 'border-border bg-bg-card/70'}`}>
+                const mergeMaterial = mergeMaterialIndexes.has(index);
+                return <article key={`${key}-${index}`} className={`rounded-2xl border p-4 ${active ? 'border-emerald-500/60 bg-emerald-950/15' : mergeMaterial ? 'border-red-500/70 bg-red-950/15' : 'border-border bg-bg-card/70'}`}>
                     <div className="flex gap-4">
                         <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/20">{mapping && spriteIndex >= 0 ? <SpriteSheetIcon textureSrc={getAscensionTexturePath(kind === 'pet' ? 'Pets' : 'MountIcons', entry.ascensionLevel || 0, selectedVersion)} spriteWidth={mapping.sprite_size.width} spriteHeight={mapping.sprite_size.height} sheetWidth={mapping.texture_size.width} sheetHeight={mapping.texture_size.height} iconIndex={spriteIndex} className="h-16 w-16" /> : <Icon className="h-8 w-8 text-text-muted" />}</div>
-                        <div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><div><h2 className="truncate font-black text-text-primary">{entry.customName || info?.name || `${entry.rarity} ${kind}`}</h2><p className="text-xs font-bold text-amber-300">{entry.rarity} · Level {entry.level}</p></div>{active && <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-1 text-[10px] font-black uppercase text-emerald-300"><Check className="h-3 w-3" /> Active</span>}</div>
+                        <div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><div><h2 className="truncate font-black text-text-primary">{entry.customName || info?.name || `${entry.rarity} ${kind}`}</h2><p className="text-xs font-bold text-amber-300">{entry.rarity} · Level {entry.level}</p></div><div className="flex flex-col items-end gap-1">{active && <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-1 text-[10px] font-black uppercase text-emerald-300"><Check className="h-3 w-3" /> Active</span>}{mergeMaterial && <span className="rounded-full bg-red-500/15 px-2 py-1 text-[10px] font-black uppercase text-red-300">Merge Material</span>}</div></div>
                             <div className="mt-3 space-y-1">{entry.secondaryStats?.length ? entry.secondaryStats.map(stat => {
                                 const statPerfection = getStatPerfection(stat.statId, stat.value, secondaryStatLibrary);
                                 return <div key={stat.statId} className="flex justify-between gap-2 text-xs"><span className="truncate text-text-muted">{getStatName(stat.statId)}</span><span className="flex shrink-0 items-center gap-2 font-mono font-bold text-text-primary"><span>{stat.value.toFixed(2)}%</span>{statPerfection !== null && <span className="text-[10px] text-text-muted">({statPerfection.toFixed(1)}%)</span>}</span></div>;

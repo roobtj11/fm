@@ -189,6 +189,11 @@ export interface UserProfile {
         techPlanMetadata?: { isAuto: boolean; config?: any };
         useSkinWindup?: boolean;
         steppingStones?: SteppingStonesTracker;
+        swapCalculatorStage?: {
+            age: number;
+            battle: number;
+            difficulty: number;
+        };
         lastManualBackupAt?: string;
     };
 }
@@ -272,6 +277,7 @@ export const INITIAL_PROFILE: UserProfile = {
         plannerMinWaitBetweenNodes: 1,
         techPlanMetadata: { isAuto: false },
         useSkinWindup: true,
+        swapCalculatorStage: { age: 0, battle: 0, difficulty: 0 },
         steppingStones: { attempts: [], targetStones: 10 }
     }
 };

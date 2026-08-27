@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'react-toastify';
 import {
     ArrowRightLeft, Calculator, Check, PackagePlus, PawPrint, RotateCcw,
-    Shield, Sparkles, Sword, Trash2, Trophy
+    Shield, Sparkles, Sword, Target, Trash2, Trophy
 } from 'lucide-react';
 import { useProfile } from '../../context/ProfileContext';
 import { useProfileOptimizer } from '../../hooks/useProfileOptimizer';
@@ -19,7 +19,7 @@ import { formatNumber } from '../../utils/format';
 import { formatSecondaryStat } from '../../utils/statNames';
 import { getPerfection } from '../../utils/itemCalculations';
 import { PerfectionMeter } from '../../components/UI/PerfectionMeter';
-import { getMainBattleStageSummary } from '../../utils/BattleSimulator';
+import { getMainBattleStageSummary, simulateBattleMulti, type BattleResult } from '../../utils/BattleSimulator';
 import { cn } from '../../lib/utils';
 
 type EquipmentSlot = keyof UserProfile['items'];
@@ -33,6 +33,7 @@ type SwapResult = {
     currentLoadout: CompanionLoadout;
     candidateLoadout: CompanionLoadout;
     combinations: number;
+    stagePrediction: BattleResult | null;
 };
 
 const EQUIPMENT_SLOTS: EquipmentSlot[] = [
@@ -95,6 +96,25 @@ function farmKillsPerMinute(stats: AggregatedStats, enemyHealth: number, overhea
     return 60 / Math.max(0.01, fightSeconds + Math.max(0, overheadSeconds));
 }
 
+// These defaults mirror BattleEngine's current movement, spawn-distance, and wave-delay model.
+const BATTLE_TIMING = {
+    playerSpeed: 4,
+    enemySpeed: 4,
+    firstWaveSpawnDistance: 21,
+    nextWaveSpawnDistance: 28,
+    waveDelay: 1
+} as const;
+
+function estimatedTimeBetweenKills(stats: AggregatedStats, enemyCount: number, waveCount: number) {
+    const relativeSpeed = BATTLE_TIMING.playerSpeed + BATTLE_TIMING.enemySpeed;
+    const attackRange = Math.max(0, stats.weaponAttackRange || 0);
+    const firstApproach = Math.max(0, BATTLE_TIMING.firstWaveSpawnDistance - attackRange) / relativeSpeed;
+    const laterApproach = Math.max(0, BATTLE_TIMING.nextWaveSpawnDistance - attackRange) / relativeSpeed;
+    const totalNonCombatTime = firstApproach
+        + Math.max(0, waveCount - 1) * (BATTLE_TIMING.waveDelay + laterApproach);
+    return totalNonCombatTime / Math.max(1, enemyCount);
+}
+
 function bossSeconds(stats: AggregatedStats, bossHealth: number) {
     return Math.max(0, bossHealth) / Math.max(1, stats.realTotalDps);
 }
@@ -134,9 +154,10 @@ export default function SwapTest() {
     const [enemyHealth, setEnemyHealth] = useState(1_000_000);
     const [bossHealth, setBossHealth] = useState(10_000_000);
     const [overheadSeconds, setOverheadSeconds] = useState(0.35);
-    const [stageDifficulty, setStageDifficulty] = useState(0);
-    const [stageAge, setStageAge] = useState(0);
-    const [stageBattle, setStageBattle] = useState(0);
+    const savedStage = profile.misc.swapCalculatorStage;
+    const [stageDifficulty, setStageDifficulty] = useState(savedStage?.difficulty === 1 ? 1 : 0);
+    const [stageAge, setStageAge] = useState(Math.max(0, savedStage?.age ?? 0));
+    const [stageBattle, setStageBattle] = useState(savedStage?.battle ?? 0);
     const [autoStageStats, setAutoStageStats] = useState(true);
     const [respectSavedLevels, setRespectSavedLevels] = useState(true);
     const [result, setResult] = useState<SwapResult | null>(null);
@@ -154,14 +175,32 @@ export default function SwapTest() {
     );
 
     useEffect(() => {
-        if (stageBattle >= battleCount) setStageBattle(Math.max(0, battleCount - 1));
-    }, [stageBattle, battleCount]);
+        if (!battleDataLoading && stageBattle >= battleCount) setStageBattle(Math.max(0, battleCount - 1));
+    }, [stageBattle, battleCount, battleDataLoading]);
+
+    useEffect(() => {
+        if (!battleDataLoading && stageAge > maxAgeIdx) setStageAge(maxAgeIdx);
+    }, [battleDataLoading, maxAgeIdx, stageAge]);
+
+    useEffect(() => {
+        updateNestedProfile('misc', {
+            swapCalculatorStage: { age: stageAge, battle: stageBattle, difficulty: stageDifficulty }
+        });
+    }, [stageAge, stageBattle, stageDifficulty, updateNestedProfile]);
 
     useEffect(() => {
         if (!autoStageStats || !stageSummary) return;
         setEnemyHealth(Math.round(stageSummary.averageEnemyHealth));
         setBossHealth(Math.round(stageSummary.finalWaveHealth));
-    }, [autoStageStats, stageSummary]);
+        if (isReady) {
+            const currentStats = calculateProfileStats(profile);
+            setOverheadSeconds(Number(estimatedTimeBetweenKills(currentStats, stageSummary.enemyCount, stageSummary.waveCount).toFixed(3)));
+        }
+    }, [autoStageStats, stageSummary, isReady, calculateProfileStats, profile]);
+
+    const killDowntimeFor = (stats: AggregatedStats) => autoStageStats && stageSummary
+        ? estimatedTimeBetweenKills(stats, stageSummary.enemyCount, stageSummary.waveCount)
+        : overheadSeconds;
 
     const petName = (pet: PetSlot) => {
         const key = `{'Rarity': '${pet.rarity}', 'Id': ${pet.id}}`;
@@ -209,24 +248,29 @@ export default function SwapTest() {
             mount: candidateProfile.mount.active
         };
 
+        const currentStats = calculateProfileStats(currentOptimizedProfile);
+        const candidateCurrentStats = calculateProfileStats(candidateProfile);
+        const candidateOptimizedProfile = withCompanions(candidateProfile, candidateLoadout);
+        const candidateOptimizedStats = calculateProfileStats(candidateOptimizedProfile);
+        const stagePrediction = battleLibs.mainBattleLibrary
+            ? simulateBattleMulti(candidateOptimizedStats, candidateOptimizedProfile, stageAge, stageBattle, stageDifficulty, battleLibs, 100)
+            : null;
+
         setResult({
-            current: calculateProfileStats(currentOptimizedProfile),
-            candidateCurrent: calculateProfileStats(candidateProfile),
-            candidateOptimized: calculateProfileStats(withCompanions(candidateProfile, candidateLoadout)),
+            current: currentStats,
+            candidateCurrent: candidateCurrentStats,
+            candidateOptimized: candidateOptimizedStats,
             currentLoadout,
             candidateLoadout,
-            combinations: searchSize(candidateProfile)
+            combinations: searchSize(candidateProfile),
+            stagePrediction
         });
     };
 
     const resetTest = () => {
         setCandidate(null);
         setResult(null);
-        setStageDifficulty(0);
-        setStageAge(0);
-        setStageBattle(0);
         setAutoStageStats(true);
-        setOverheadSeconds(0.35);
     };
 
     const equipSwap = () => {
@@ -323,13 +367,13 @@ export default function SwapTest() {
 
     const recommendation = useMemo(() => {
         if (!result) return null;
-        const currentScore = focusScore(focus, result.current, enemyHealth, bossHealth, overheadSeconds);
-        const nextScore = focusScore(focus, result.candidateOptimized, enemyHealth, bossHealth, overheadSeconds);
+        const currentScore = focusScore(focus, result.current, enemyHealth, bossHealth, killDowntimeFor(result.current));
+        const nextScore = focusScore(focus, result.candidateOptimized, enemyHealth, bossHealth, killDowntimeFor(result.candidateOptimized));
         const change = percentChange(currentScore, nextScore);
         if (change > 1) return { label: 'Equip the new item', change, color: 'emerald' };
         if (change < -1) return { label: 'Keep the current item', change, color: 'red' };
         return { label: 'Sidegrade / situational', change, color: 'amber' };
-    }, [result, focus, enemyHealth, bossHealth, overheadSeconds]);
+    }, [result, focus, enemyHealth, bossHealth, overheadSeconds, autoStageStats, stageSummary]);
 
     return (
         <div className="space-y-6 animate-fade-in pb-20 max-w-7xl mx-auto">
@@ -484,8 +528,11 @@ export default function SwapTest() {
                 <div className="grid sm:grid-cols-3 gap-3">
                     <NumberField label="Average enemy health" value={enemyHealth} onChange={value => { setEnemyHealth(value); setAutoStageStats(false); }} />
                     <NumberField label="Boss / final wave health" value={bossHealth} onChange={value => { setBossHealth(value); setAutoStageStats(false); }} />
-                    <NumberField label="Time between kills (sec)" value={overheadSeconds} onChange={setOverheadSeconds} step="0.05" />
+                    <NumberField label={`Time between kills (sec)${autoStageStats ? ' · Auto' : ''}`} value={overheadSeconds} onChange={value => { setOverheadSeconds(value); setAutoStageStats(false); }} step="0.01" disabled={autoStageStats} />
                 </div>
+                <p className="text-[11px] leading-5 text-text-muted">
+                    Auto timing uses the same battle model as Progress Prediction: stage wave count, enemy spawn distance, movement speed, your weapon range, and the one-second delay between waves. Switch Auto-fill off only to test a custom farming delay.
+                </p>
 
                 <button
                     onClick={() => { setRespectSavedLevels(v => !v); setResult(null); }}
@@ -538,10 +585,38 @@ export default function SwapTest() {
                         </div>
                     </div>
 
+                    <div className={cn(
+                        'rounded-xl border p-4',
+                        result.stagePrediction && result.stagePrediction.winProbability >= 50
+                            ? 'border-emerald-400/40 bg-emerald-500/10'
+                            : 'border-red-400/40 bg-red-500/10'
+                    )}>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <div className="flex items-center gap-2 text-sm font-bold text-text-primary">
+                                    <Target className="h-4 w-4" /> New-item stage prediction
+                                </div>
+                                <p className="mt-1 text-xs text-text-secondary">
+                                    {stageDifficulty === 1 ? 'Hard' : 'Normal'} {stageAge + 1}-{stageBattle + 1}, with the new item and its best companion loadout.
+                                </p>
+                            </div>
+                            {result.stagePrediction ? (
+                                <div className="text-left sm:text-right">
+                                    <div className={cn('text-lg font-black', result.stagePrediction.winProbability >= 50 ? 'text-emerald-300' : 'text-red-300')}>
+                                        {result.stagePrediction.winProbability >= 50 ? 'Predicted pass' : 'Predicted fail'}
+                                    </div>
+                                    <div className="text-xs font-mono text-text-secondary">
+                                        {result.stagePrediction.winProbability.toFixed(1)}% win chance · {result.stagePrediction.totalRuns} runs
+                                    </div>
+                                </div>
+                            ) : <div className="text-xs text-text-muted">Stage prediction unavailable</div>}
+                        </div>
+                    </div>
+
                     <div className="grid lg:grid-cols-3 gap-3">
-                        <MetricCard title="Current, optimized" stats={result.current} focus={focus} enemyHealth={enemyHealth} bossHealth={bossHealth} overheadSeconds={overheadSeconds} />
-                        <MetricCard title="New item, current companions" stats={result.candidateCurrent} focus={focus} enemyHealth={enemyHealth} bossHealth={bossHealth} overheadSeconds={overheadSeconds} />
-                        <MetricCard title="New item, re-optimized" stats={result.candidateOptimized} focus={focus} enemyHealth={enemyHealth} bossHealth={bossHealth} overheadSeconds={overheadSeconds} highlight />
+                        <MetricCard title="Current, optimized" stats={result.current} focus={focus} enemyHealth={enemyHealth} bossHealth={bossHealth} overheadSeconds={killDowntimeFor(result.current)} />
+                        <MetricCard title="New item, current companions" stats={result.candidateCurrent} focus={focus} enemyHealth={enemyHealth} bossHealth={bossHealth} overheadSeconds={killDowntimeFor(result.candidateCurrent)} />
+                        <MetricCard title="New item, re-optimized" stats={result.candidateOptimized} focus={focus} enemyHealth={enemyHealth} bossHealth={bossHealth} overheadSeconds={killDowntimeFor(result.candidateOptimized)} highlight />
                     </div>
 
                     <StatComparison current={result.current} candidateCurrent={result.candidateCurrent} candidateOptimized={result.candidateOptimized} />
@@ -644,12 +719,13 @@ export default function SwapTest() {
 }
 
 function NumberField({
-    label, value, onChange, step = '1'
+    label, value, onChange, step = '1', disabled = false
 }: {
     label: string;
     value: number;
     onChange: (value: number) => void;
     step?: string;
+    disabled?: boolean;
 }) {
     return (
         <label className="space-y-1">
@@ -659,8 +735,9 @@ function NumberField({
                 min="0"
                 step={step}
                 value={value}
+                disabled={disabled}
                 onChange={event => onChange(Math.max(0, Number(event.target.value) || 0))}
-                className="w-full h-10 rounded-lg border border-border bg-bg-input px-3 text-sm text-text-primary focus:outline-none focus:border-accent-primary"
+                className="w-full h-10 rounded-lg border border-border bg-bg-input px-3 text-sm text-text-primary focus:outline-none focus:border-accent-primary disabled:cursor-default disabled:opacity-70"
             />
         </label>
     );

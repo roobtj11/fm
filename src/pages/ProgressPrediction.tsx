@@ -5,6 +5,8 @@ import { BattleResult } from '../utils/BattleSimulator';
 import { SpriteIcon } from '../components/UI/SpriteIcon';
 import { BattleVisualizerModal } from '../components/Battle/BattleVisualizerModal';
 import { DebugConfig } from '../utils/BattleEngine';
+import { useProfile } from '../context/ProfileContext';
+import { toast } from 'react-toastify';
 
 // Format large numbers
 function formatNumber(num: number): string {
@@ -181,6 +183,7 @@ function MainBattleView({
     setSimProgress: (p: { current: number; total: number }) => void;
     resultsCache: React.MutableRefObject<Map<string, BattleResult>>;
 }) {
+    const { updateNestedProfile } = useProfile();
     const [selectedAge, setSelectedAge] = useState(0);
     const [selectedLevel, setSelectedLevel] = useState(0);
     const [difficulty, setDifficulty] = useState(0); // 0=Normal, 1=Hard
@@ -489,7 +492,7 @@ function MainBattleView({
                         <TrendingUp className="w-5 h-5 text-accent-primary" />
                         Full Progression Path
                     </h2>
-                    <div className="flex items-center gap-4">
+                    <div className="flex flex-wrap items-center justify-end gap-3">
                         {isSimulating && (
                             <div className="flex items-center gap-2 text-[10px] text-accent-primary animate-pulse bg-surface-secondary px-2 py-1 rounded-full border border-accent-primary/20">
                                 <div className="w-2 h-2 rounded-full border-2 border-current border-t-transparent animate-spin" />
@@ -499,6 +502,24 @@ function MainBattleView({
                         <div className="text-xs text-gray-400">
                             {maxBeatable ? `Max: ${maxBeatable.difficulty === 1 ? 'Hard' : 'Normal'} ${maxBeatable.ageIdx + 1}-${maxBeatable.battleIdx + 1}` : 'Calculating...'}
                         </div>
+                        {maxBeatable && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    updateNestedProfile('misc', {
+                                        swapCalculatorStage: {
+                                            age: maxBeatable.ageIdx,
+                                            battle: maxBeatable.battleIdx,
+                                            difficulty: maxBeatable.difficulty
+                                        }
+                                    });
+                                    toast.success(`Swap calculator set to ${maxBeatable.difficulty === 1 ? 'Hard' : 'Normal'} ${maxBeatable.ageIdx + 1}-${maxBeatable.battleIdx + 1}.`);
+                                }}
+                                className="rounded-lg border border-accent-primary/40 bg-accent-primary/10 px-3 py-1.5 text-[11px] font-bold text-accent-primary transition-colors hover:bg-accent-primary/20"
+                            >
+                                Set calculator stage
+                            </button>
+                        )}
                     </div>
                 </div>
 
