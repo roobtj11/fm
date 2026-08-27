@@ -17,6 +17,8 @@ import { AggregatedStats } from '../../utils/statEngine';
 import { AGES, MAX_ACTIVE_PETS } from '../../utils/constants';
 import { formatNumber } from '../../utils/format';
 import { formatSecondaryStat } from '../../utils/statNames';
+import { getPerfection } from '../../utils/itemCalculations';
+import { PerfectionMeter } from '../../components/UI/PerfectionMeter';
 import { getMainBattleStageSummary } from '../../utils/BattleSimulator';
 import { cn } from '../../lib/utils';
 
@@ -118,6 +120,7 @@ export default function SwapTest() {
     const { profile, updateNestedProfile } = useProfile();
     const { optimizeLoadout, calculateProfileStats, isReady } = useProfileOptimizer();
     const { data: petLibrary } = useGameData<any>('PetLibrary.json');
+    const { data: secondaryStatLibrary } = useGameData<any>('SecondaryStatLibrary.json');
     const {
         libs: battleLibs,
         getBattleCountForAge,
@@ -364,7 +367,7 @@ export default function SwapTest() {
                 </div>
 
                 <div className="grid md:grid-cols-2 gap-3">
-                    <ItemSummary title="Currently equipped" item={currentItem} icon={<Shield className="w-4 h-4" />} />
+                    <ItemSummary title="Currently equipped" item={currentItem} icon={<Shield className="w-4 h-4" />} secondaryStatLibrary={secondaryStatLibrary} />
                     <button
                         onClick={() => setItemModalOpen(true)}
                         className="text-left rounded-xl border border-dashed border-accent-primary/50 bg-accent-primary/5 p-4 hover:bg-accent-primary/10 transition-colors"
@@ -375,6 +378,7 @@ export default function SwapTest() {
                         </div>
                         <div className="text-text-primary">{describeItem(candidate)}</div>
                         <div className="text-xs text-text-muted mt-1">{candidate ? describeSubstats(candidate.secondaryStats) : 'Select age, item, level, skin and special stats.'}</div>
+                        {candidate && <PerfectionDisplay item={candidate} secondaryStatLibrary={secondaryStatLibrary} />}
                     </button>
                 </div>
             </section>
@@ -543,8 +547,8 @@ export default function SwapTest() {
                     <StatComparison current={result.current} candidateCurrent={result.candidateCurrent} candidateOptimized={result.candidateOptimized} />
 
                     <div className="grid md:grid-cols-2 gap-3">
-                        <LoadoutSummary title="Best companions on current gear" loadout={result.currentLoadout} petName={petName} mountName={mountName} />
-                        <LoadoutSummary title="Best companions after swap" loadout={result.candidateLoadout} petName={petName} mountName={mountName} highlight />
+                        <LoadoutSummary title="Best companions on current gear" loadout={result.currentLoadout} petName={petName} mountName={mountName} secondaryStatLibrary={secondaryStatLibrary} />
+                        <LoadoutSummary title="Best companions after swap" loadout={result.candidateLoadout} petName={petName} mountName={mountName} secondaryStatLibrary={secondaryStatLibrary} highlight />
                     </div>
                 </section>
             )}
@@ -584,6 +588,7 @@ export default function SwapTest() {
                                     key={pet.instanceId || `pet-${index}`}
                                     title={petName(pet)}
                                     subtitle={`Lv. ${pet.level} · ID ${pet.instanceId || 'legacy'}`}
+                                    perfection={getPerfection(pet as any, secondaryStatLibrary)}
                                     equipped={equipped}
                                     onEquip={() => equipPet(pet)}
                                     onRemove={() => removePet(index)}
@@ -603,6 +608,7 @@ export default function SwapTest() {
                                     key={mount.instanceId || `mount-${index}`}
                                     title={mountName(mount)}
                                     subtitle={`Lv. ${mount.level} · ID ${mount.instanceId || 'legacy'}`}
+                                    perfection={getPerfection(mount as any, secondaryStatLibrary)}
                                     equipped={equipped}
                                     onEquip={() => equipMount(mount)}
                                     onRemove={() => removeMount(index)}
@@ -660,12 +666,22 @@ function NumberField({
     );
 }
 
-function ItemSummary({ title, item, icon }: { title: string; item: ItemSlot | null; icon: React.ReactNode }) {
+function PerfectionDisplay({ item, secondaryStatLibrary }: { item: { secondaryStats?: { statId: string; value: number }[] }; secondaryStatLibrary: any }) {
+    return (
+        <div className="mt-3 rounded-lg border border-border/60 bg-bg-primary/20 px-3 py-2">
+            <div className="mb-1 text-[10px] font-black uppercase tracking-wider text-text-muted">Perfection</div>
+            <PerfectionMeter value={getPerfection(item as any, secondaryStatLibrary)} />
+        </div>
+    );
+}
+
+function ItemSummary({ title, item, icon, secondaryStatLibrary }: { title: string; item: ItemSlot | null; icon: React.ReactNode; secondaryStatLibrary: any }) {
     return (
         <div className="rounded-xl border border-border bg-bg-input/20 p-4">
             <div className="flex items-center gap-2 text-sm font-bold text-text-secondary mb-2">{icon}{title}</div>
             <div className="text-text-primary">{describeItem(item)}</div>
             <div className="text-xs text-text-muted mt-1">{item ? describeSubstats(item.secondaryStats) : 'No item equipped.'}</div>
+            {item && <PerfectionDisplay item={item} secondaryStatLibrary={secondaryStatLibrary} />}
         </div>
     );
 }
@@ -811,12 +827,13 @@ function StatComparison({
 }
 
 function LoadoutSummary({
-    title, loadout, petName, mountName, highlight
+    title, loadout, petName, mountName, secondaryStatLibrary, highlight
 }: {
     title: string;
     loadout: CompanionLoadout;
     petName: (pet: PetSlot) => string;
     mountName: (mount: MountSlot) => string;
+    secondaryStatLibrary: any;
     highlight?: boolean;
 }) {
     return (
@@ -825,9 +842,9 @@ function LoadoutSummary({
                 <Trophy className="w-4 h-4 text-blue-400" />{title}
             </div>
             {loadout.pets.length ? loadout.pets.map((pet, index) => (
-                <div key={pet.instanceId || index} className="text-xs text-text-secondary">Pet {index + 1}: {petName(pet)}</div>
+                <div key={pet.instanceId || index} className="rounded-lg border border-border/40 bg-bg-primary/20 p-2 text-xs text-text-secondary"><div>Pet {index + 1}: {petName(pet)}</div><PerfectionMeter value={getPerfection(pet as any, secondaryStatLibrary)} className="mt-1.5" barClassName="h-1.5" /></div>
             )) : <div className="text-xs text-text-muted">No pets equipped</div>}
-            <div className="text-xs text-text-secondary">Mount: {loadout.mount ? mountName(loadout.mount) : 'None'}</div>
+            <div className="rounded-lg border border-border/40 bg-bg-primary/20 p-2 text-xs text-text-secondary"><div>Mount: {loadout.mount ? mountName(loadout.mount) : 'None'}</div>{loadout.mount && <PerfectionMeter value={getPerfection(loadout.mount as any, secondaryStatLibrary)} className="mt-1.5" barClassName="h-1.5" />}</div>
         </div>
     );
 }
@@ -845,10 +862,11 @@ function InventoryColumn({ title, empty, children }: { title: string; empty: str
 }
 
 function InventoryRow({
-    title, subtitle, equipped, onEquip, onRemove
+    title, subtitle, perfection, equipped, onEquip, onRemove
 }: {
     title: string;
     subtitle: string;
+    perfection: number | null;
     equipped: boolean;
     onEquip: () => void;
     onRemove: () => void;
@@ -861,6 +879,7 @@ function InventoryRow({
             <div className="min-w-0 flex-1">
                 <div className="text-sm text-text-primary break-words">{title}</div>
                 <div className="text-[11px] text-text-muted mt-1 font-mono">{subtitle}</div>
+                <div className="mt-2 max-w-xs"><div className="mb-1 text-[9px] font-black uppercase tracking-wider text-text-muted">Perfection</div><PerfectionMeter value={perfection} barClassName="h-1.5" /></div>
             </div>
             <div className="flex items-center gap-1 shrink-0">
                 <Button size="sm" variant={equipped ? 'secondary' : 'outline'} onClick={onEquip} disabled={equipped}>

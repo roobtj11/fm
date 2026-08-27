@@ -8,6 +8,8 @@ import { MountSelectorModal } from '../components/Profile/MountSelectorModal';
 import { SpriteSheetIcon } from '../components/UI/SpriteSheetIcon';
 import { getAscensionTexturePath } from '../utils/ascensionUtils';
 import { getStatName } from '../utils/statNames';
+import { getPerfection, getStatPerfection } from '../utils/itemCalculations';
+import { PerfectionMeter } from '../components/UI/PerfectionMeter';
 import type { MountSlot, PetSlot } from '../types/Profile';
 
 const makeId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
@@ -106,6 +108,7 @@ function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, 
     const [search, setSearch] = useState('');
     const { selectedVersion } = useGameDataContext();
     const { data: spriteMapping } = useGameData<any>('ManualSpriteMapping.json');
+    const { data: secondaryStatLibrary } = useGameData<any>('SecondaryStatLibrary.json');
     const mapping = kind === 'pet' ? spriteMapping?.pets : spriteMapping?.mounts;
     const visible = useMemo(() => entries.map((entry, index) => ({ entry, index })).filter(({ entry }) => {
         const info = Object.values(mapping?.mapping || {}).find((value: any) => value.id === entry.id && value.rarity === entry.rarity) as any;
@@ -129,12 +132,20 @@ function CollectionPage({ kind, title, description, entries, activeKeys, onAdd, 
                 const info = infoEntry?.[1] as any;
                 const key = entry.instanceId || `${entry.rarity}-${entry.id}-${entry.level}`;
                 const active = activeKeys.has(key);
+                const perfection = getPerfection(entry as any, secondaryStatLibrary);
                 return <article key={`${key}-${index}`} className={`rounded-2xl border p-4 ${active ? 'border-emerald-500/60 bg-emerald-950/15' : 'border-border bg-bg-card/70'}`}>
                     <div className="flex gap-4">
                         <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/20">{mapping && spriteIndex >= 0 ? <SpriteSheetIcon textureSrc={getAscensionTexturePath(kind === 'pet' ? 'Pets' : 'MountIcons', entry.ascensionLevel || 0, selectedVersion)} spriteWidth={mapping.sprite_size.width} spriteHeight={mapping.sprite_size.height} sheetWidth={mapping.texture_size.width} sheetHeight={mapping.texture_size.height} iconIndex={spriteIndex} className="h-16 w-16" /> : <Icon className="h-8 w-8 text-text-muted" />}</div>
                         <div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><div><h2 className="truncate font-black text-text-primary">{entry.customName || info?.name || `${entry.rarity} ${kind}`}</h2><p className="text-xs font-bold text-amber-300">{entry.rarity} · Level {entry.level}</p></div>{active && <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-1 text-[10px] font-black uppercase text-emerald-300"><Check className="h-3 w-3" /> Active</span>}</div>
-                            <div className="mt-3 space-y-1">{entry.secondaryStats?.length ? entry.secondaryStats.map(stat => <div key={stat.statId} className="flex justify-between gap-2 text-xs"><span className="truncate text-text-muted">{getStatName(stat.statId)}</span><span className="font-mono font-bold text-text-primary">{stat.value.toFixed(2)}%</span></div>) : <p className="text-xs text-text-muted">No secondary stats recorded</p>}</div>
+                            <div className="mt-3 space-y-1">{entry.secondaryStats?.length ? entry.secondaryStats.map(stat => {
+                                const statPerfection = getStatPerfection(stat.statId, stat.value, secondaryStatLibrary);
+                                return <div key={stat.statId} className="flex justify-between gap-2 text-xs"><span className="truncate text-text-muted">{getStatName(stat.statId)}</span><span className="flex shrink-0 items-center gap-2 font-mono font-bold text-text-primary"><span>{stat.value.toFixed(2)}%</span>{statPerfection !== null && <span className="text-[10px] text-text-muted">({statPerfection.toFixed(1)}%)</span>}</span></div>;
+                            }) : <p className="text-xs text-text-muted">No secondary stats recorded</p>}</div>
                         </div>
+                    </div>
+                    <div className="mt-4 rounded-lg border border-border/60 bg-bg-input/20 px-3 py-2">
+                        <div className="mb-1 flex items-center justify-between text-[10px] font-black uppercase tracking-wider text-text-muted"><span>Perfection</span><span>{entry.secondaryStats?.length || 0} rolled stats</span></div>
+                        <PerfectionMeter value={perfection} />
                     </div>
                     <div className="mt-4 grid grid-cols-3 gap-2"><Action onClick={() => onEquip(index)} disabled={active} icon={<Check className="h-3.5 w-3.5" />}>{active ? 'Active' : 'Equip'}</Action><Action onClick={() => onEdit(index)} icon={<Pencil className="h-3.5 w-3.5" />}>Edit</Action><Action onClick={() => onDelete(index)} icon={<Trash2 className="h-3.5 w-3.5" />} danger>Delete</Action></div>
                 </article>;
