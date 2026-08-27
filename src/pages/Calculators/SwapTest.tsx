@@ -158,6 +158,7 @@ export default function SwapTest() {
     const [stageDifficulty, setStageDifficulty] = useState(savedStage?.difficulty === 1 ? 1 : 0);
     const [stageAge, setStageAge] = useState(Math.max(0, savedStage?.age ?? 0));
     const [stageBattle, setStageBattle] = useState(savedStage?.battle ?? 0);
+    const [stagePredictionRuns, setStagePredictionRuns] = useState(10);
     const [autoStageStats, setAutoStageStats] = useState(true);
     const [respectSavedLevels, setRespectSavedLevels] = useState(true);
     const [result, setResult] = useState<SwapResult | null>(null);
@@ -253,7 +254,7 @@ export default function SwapTest() {
         const candidateOptimizedProfile = withCompanions(candidateProfile, candidateLoadout);
         const candidateOptimizedStats = calculateProfileStats(candidateOptimizedProfile);
         const stagePrediction = battleLibs.mainBattleLibrary
-            ? simulateBattleMulti(candidateOptimizedStats, candidateOptimizedProfile, stageAge, stageBattle, stageDifficulty, battleLibs, 100)
+            ? simulateBattleMulti(candidateOptimizedStats, candidateOptimizedProfile, stageAge, stageBattle, stageDifficulty, battleLibs, stagePredictionRuns)
             : null;
 
         setResult({
@@ -476,7 +477,10 @@ export default function SwapTest() {
                             <span className="text-xs text-text-muted">Difficulty</span>
                             <select
                                 value={stageDifficulty}
-                                onChange={event => setStageDifficulty(Number(event.target.value))}
+                                onChange={event => {
+                                    setStageDifficulty(Number(event.target.value));
+                                    setResult(null);
+                                }}
                                 className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
                             >
                                 <option value={0}>Normal</option>
@@ -487,7 +491,11 @@ export default function SwapTest() {
                             <span className="text-xs text-text-muted">Age</span>
                             <select
                                 value={stageAge}
-                                onChange={event => { setStageAge(Number(event.target.value)); setStageBattle(0); }}
+                                onChange={event => {
+                                    setStageAge(Number(event.target.value));
+                                    setStageBattle(0);
+                                    setResult(null);
+                                }}
                                 className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
                             >
                                 {Array.from({ length: maxAgeIdx + 1 }, (_, age) => (
@@ -499,7 +507,10 @@ export default function SwapTest() {
                             <span className="text-xs text-text-muted">Stage</span>
                             <select
                                 value={stageBattle}
-                                onChange={event => setStageBattle(Number(event.target.value))}
+                                onChange={event => {
+                                    setStageBattle(Number(event.target.value));
+                                    setResult(null);
+                                }}
                                 className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
                             >
                                 {Array.from({ length: battleCount }, (_, battle) => (
@@ -507,6 +518,28 @@ export default function SwapTest() {
                                 ))}
                             </select>
                         </label>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,12rem)_1fr] sm:items-end">
+                        <label className="space-y-1">
+                            <span className="text-xs text-text-muted">Stage prediction runs</span>
+                            <input
+                                type="number"
+                                min={1}
+                                max={1000}
+                                step={1}
+                                value={stagePredictionRuns}
+                                onChange={event => {
+                                    const nextRuns = Math.max(1, Math.min(1000, Math.round(Number(event.target.value) || 10)));
+                                    setStagePredictionRuns(nextRuns);
+                                    setResult(null);
+                                }}
+                                className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                            />
+                        </label>
+                        <p className="text-[11px] leading-5 text-text-muted">
+                            Only the selected difficulty, age, and stage are simulated. The default is 10 runs for speed; increasing it improves confidence but takes longer.
+                        </p>
                     </div>
 
                     {stageSummary ? (
