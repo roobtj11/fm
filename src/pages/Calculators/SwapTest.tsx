@@ -158,6 +158,7 @@ export default function SwapTest() {
     const [stageDifficulty, setStageDifficulty] = useState(savedStage?.difficulty === 1 ? 1 : 0);
     const [stageAge, setStageAge] = useState(Math.max(0, savedStage?.age ?? 0));
     const [stageBattle, setStageBattle] = useState(savedStage?.battle ?? 0);
+    const [stagePredictionEnabled, setStagePredictionEnabled] = useState(true);
     const [stagePredictionRuns, setStagePredictionRuns] = useState(10);
     const [autoStageStats, setAutoStageStats] = useState(true);
     const [respectSavedLevels, setRespectSavedLevels] = useState(true);
@@ -253,7 +254,7 @@ export default function SwapTest() {
         const candidateCurrentStats = calculateProfileStats(candidateProfile);
         const candidateOptimizedProfile = withCompanions(candidateProfile, candidateLoadout);
         const candidateOptimizedStats = calculateProfileStats(candidateOptimizedProfile);
-        const stagePrediction = battleLibs.mainBattleLibrary
+        const stagePrediction = stagePredictionEnabled && battleLibs.mainBattleLibrary
             ? simulateBattleMulti(candidateOptimizedStats, candidateOptimizedProfile, stageAge, stageBattle, stageDifficulty, battleLibs, stagePredictionRuns)
             : null;
 
@@ -459,17 +460,33 @@ export default function SwapTest() {
                                 Uses the exact Main Battle configuration and enemy scaling from Progress Prediction.
                             </p>
                         </div>
-                        <button
-                            onClick={() => setAutoStageStats(value => !value)}
-                            className={cn(
-                                'rounded-lg border px-3 py-2 text-xs font-semibold transition-colors',
-                                autoStageStats
-                                    ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
-                                    : 'border-border text-text-secondary'
-                            )}
-                        >
-                            Auto-fill: {autoStageStats ? 'On' : 'Manual override'}
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                            <button
+                                onClick={() => {
+                                    setStagePredictionEnabled(value => !value);
+                                    setResult(null);
+                                }}
+                                className={cn(
+                                    'rounded-lg border px-3 py-2 text-xs font-semibold transition-colors',
+                                    stagePredictionEnabled
+                                        ? 'bg-blue-500/15 border-blue-400/40 text-blue-300'
+                                        : 'border-border text-text-secondary'
+                                )}
+                            >
+                                Stage prediction: {stagePredictionEnabled ? 'On' : 'Off · Quick test'}
+                            </button>
+                            <button
+                                onClick={() => setAutoStageStats(value => !value)}
+                                className={cn(
+                                    'rounded-lg border px-3 py-2 text-xs font-semibold transition-colors',
+                                    autoStageStats
+                                        ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
+                                        : 'border-border text-text-secondary'
+                                )}
+                            >
+                                Auto-fill: {autoStageStats ? 'On' : 'Manual override'}
+                            </button>
+                        </div>
                     </div>
 
                     <div className="grid sm:grid-cols-3 gap-3">
@@ -520,7 +537,10 @@ export default function SwapTest() {
                         </label>
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-[minmax(0,12rem)_1fr] sm:items-end">
+                    <div className={cn(
+                        'grid gap-3 sm:grid-cols-[minmax(0,12rem)_1fr] sm:items-end transition-opacity',
+                        !stagePredictionEnabled && 'opacity-50'
+                    )}>
                         <label className="space-y-1">
                             <span className="text-xs text-text-muted">Stage prediction runs</span>
                             <input
@@ -529,6 +549,7 @@ export default function SwapTest() {
                                 max={1000}
                                 step={1}
                                 value={stagePredictionRuns}
+                                disabled={!stagePredictionEnabled}
                                 onChange={event => {
                                     const nextRuns = Math.max(1, Math.min(1000, Math.round(Number(event.target.value) || 10)));
                                     setStagePredictionRuns(nextRuns);
@@ -538,7 +559,9 @@ export default function SwapTest() {
                             />
                         </label>
                         <p className="text-[11px] leading-5 text-text-muted">
-                            Only the selected difficulty, age, and stage are simulated. The default is 10 runs for speed; increasing it improves confidence but takes longer.
+                            {stagePredictionEnabled
+                                ? 'Only the selected difficulty, age, and stage are simulated. The default is 10 runs for speed; increasing it improves confidence but takes longer.'
+                                : 'Quick test skips battle simulation completely. Your full before-and-after stat comparison still runs.'}
                         </p>
                     </div>
 
@@ -620,9 +643,11 @@ export default function SwapTest() {
 
                     <div className={cn(
                         'rounded-xl border p-4',
-                        result.stagePrediction && result.stagePrediction.winProbability >= 50
-                            ? 'border-emerald-400/40 bg-emerald-500/10'
-                            : 'border-red-400/40 bg-red-500/10'
+                        !stagePredictionEnabled
+                            ? 'border-border bg-bg-primary/20'
+                            : result.stagePrediction && result.stagePrediction.winProbability >= 50
+                                ? 'border-emerald-400/40 bg-emerald-500/10'
+                                : 'border-red-400/40 bg-red-500/10'
                     )}>
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div>
@@ -633,7 +658,9 @@ export default function SwapTest() {
                                     {stageDifficulty === 1 ? 'Hard' : 'Normal'} {stageAge + 1}-{stageBattle + 1}, with the new item and its best companion loadout.
                                 </p>
                             </div>
-                            {result.stagePrediction ? (
+                            {!stagePredictionEnabled ? (
+                                <div className="text-xs font-bold text-text-muted">Skipped · Quick test</div>
+                            ) : result.stagePrediction ? (
                                 <div className="text-left sm:text-right">
                                     <div className={cn('text-lg font-black', result.stagePrediction.winProbability >= 50 ? 'text-emerald-300' : 'text-red-300')}>
                                         {result.stagePrediction.winProbability >= 50 ? 'Predicted pass' : 'Predicted fail'}
