@@ -195,9 +195,21 @@ export default function CompanionImport() {
             });
             let parsed = parseOcr(ocr.text, ocr.confidence, spriteMapping, autoItemMapping);
             if (recognitionFailed(parsed)) {
-                const templates = (profile.misc.scannerTrainingExamples || []).filter(example => Math.abs(example.aspectRatio - aspectRatio) < 0.18);
+                const sharedResponse = await fetch('/api/scanner-training').catch(() => null);
+                const sharedPayload = sharedResponse?.ok
+                    ? await sharedResponse.json().catch(() => null) as { examples?: Array<Omit<ScannerTrainingExample, 'id' | 'createdAt' | 'region'> & { regionJson?: string }> } | null
+                    : null;
+                const sharedTemplates: ScannerTrainingExample[] = (sharedPayload?.examples || []).flatMap((example, index) => {
+                    try {
+                        const region = JSON.parse(example.regionJson || '') as OcrRegion;
+                        return [{ ...example, id: `shared-${index}`, createdAt: '', region } as ScannerTrainingExample];
+                    } catch { return []; }
+                });
+                const templates = [...(profile.misc.scannerTrainingExamples || []), ...sharedTemplates]
+                    .filter(example => Math.abs(example.aspectRatio - aspectRatio) < 0.18)
+                    .slice(0, 80);
                 if (templates.length) {
-                    setProgressLabel('checking your saved scan regions');
+                    setProgressLabel('checking learned scan regions');
                     const readings = await recognizeRegionsLocally(imageDataUrl, templates.map(template => template.region), message => setProgress(Math.round((message.progress || 0) * 100)));
                     const trainedText = templates.map((template, index) => `${template.field}: ${readings[index]?.text || ''}`).join('\n');
                     parsed = parseOcr(`${ocr.text}\n${trainedText}`, Math.max(ocr.confidence, ...readings.map(reading => reading.confidence)), spriteMapping, autoItemMapping);
@@ -252,6 +264,7 @@ export default function CompanionImport() {
     const save = async () => {
         if (!result || !selectedMatch || duplicate) return;
         setBusy(true);
+        let trainingExamples: ScannerTrainingExample[] = [];
         if (corrections.length && imageDataUrl) {
             let readings: { text: string }[] = [];
             try {
@@ -262,7 +275,7 @@ export default function CompanionImport() {
             } catch {
                 // Corrections still work as layout training even when the crop OCR cannot be repeated.
             }
-            const examples: ScannerTrainingExample[] = corrections.map((correction, index) => ({
+            trainingExamples = corrections.map((correction, index) => ({
                 id: makeId(),
                 kind: result.kind,
                 field: correction.field,
@@ -273,8 +286,13 @@ export default function CompanionImport() {
                 createdAt: new Date().toISOString(),
             }));
             updateNestedProfile('misc', {
-                scannerTrainingExamples: [...(profile.misc.scannerTrainingExamples || []), ...examples].slice(-100),
+                scannerTrainingExamples: [...(profile.misc.scannerTrainingExamples || []), ...trainingExamples].slice(-100),
             });
+            if (profile.misc.scannerContributionEnabled !== false) {
+                void fetch('/api/scanner-training', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ examples: trainingExamples }),
+                }).catch(() => undefined);
+            }
         }
         if (result.kind === 'item') {
             const slot = slotFromType(selectedMatch.TypeName) || result.slot;
@@ -317,6 +335,14 @@ export default function CompanionImport() {
         <header className="border-b border-border pb-6"><h1 className="flex items-center gap-3 text-3xl font-black text-text-primary"><Camera className="h-8 w-8 text-accent-primary" />Screenshot Import</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">Upload a detailed equipment, pet, or mount card. Free local OCR reads it inside your browser—no AI, tokens, or per-image charge. If automatic reading fails, you can mark only the missing regions and teach the scanner that layout.</p></header>
         <div className="grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
             <section className="space-y-4 rounded-2xl border border-border bg-bg-card/70 p-5">
+                <label className="flex items-start gap-3 rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-3 text-xs text-text-secondary">
+                    <input type="checkbox" checked={profile.misc.scannerContributionEnabled !== false} onChange={event => {
+                        const enabled = event.target.checked;
+                        updateNestedProfile('misc', { scannerContributionEnabled: enabled });
+                        if (!enabled) void fetch('/api/scanner-training', { method: 'DELETE' }).catch(() => undefined);
+                    }} className="mt-0.5 accent-cyan-400" />
+                    <span><strong className="block text-text-primary">Improve scanning for everyone</strong><span className="mt-1 block leading-5">On by default. If automatic scanning fails and you correct it, only the field, crop coordinates, OCR text, and corrected game value are shared anonymously. The screenshot never leaves your device.</span></span>
+                </label>
                 <div onClick={() => fileRef.current?.click()} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); chooseFile(event.dataTransfer.files[0]); }} className="flex min-h-72 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-border bg-black/15 text-center hover:border-accent-primary/60">
                     {preview ? <img src={preview} alt="Screenshot preview" className="max-h-[32rem] w-full object-contain" /> : <><Upload className="h-10 w-10 text-accent-primary" /><h2 className="mt-3 font-black text-text-primary">Drop a screenshot here</h2><p className="mt-1 text-xs text-text-muted">or click to choose PNG, JPG, or WEBP · 10 MB max</p></>}
                 </div>

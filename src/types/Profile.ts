@@ -59,6 +59,7 @@ export type SteppingStoneChoice = 'up' | 'down';
 export type SteppingStoneOutcome = 'safe' | 'fall';
 export type SteppingStonePredictionModel = 'balanced_50' | 'balanced_bayesian' | 'best_observed';
 export type SteppingStonePredictionScope = 'whole_run' | 'per_stone';
+export type SteppingStoneDataSource = 'my_data' | 'all_users' | 'combined';
 
 export interface SteppingStoneEntry {
     id: string;
@@ -81,6 +82,7 @@ export interface SteppingStonesTracker {
     targetStones: number;
     predictionModel?: SteppingStonePredictionModel;
     predictionScope?: SteppingStonePredictionScope;
+    dataSource?: SteppingStoneDataSource;
 }
 
 export type BuildGoalMetric =
@@ -239,6 +241,7 @@ export interface UserProfile {
         buildGoals?: BuildGoalSettings;
         scannerTrainingExamples?: ScannerTrainingExample[];
         scannerContributionEnabled?: boolean;
+        steppingStoneContributionEnabled?: boolean;
         lastManualBackupAt?: string;
     };
 }
@@ -326,6 +329,7 @@ export const INITIAL_PROFILE: UserProfile = {
         buildGoals: { activeGoalId: 'balanced_late_game', customGoals: [] },
         scannerTrainingExamples: [],
         scannerContributionEnabled: true,
-        steppingStones: { attempts: [], targetStones: 10 }
+        steppingStoneContributionEnabled: true,
+        steppingStones: { attempts: [], targetStones: 10, dataSource: 'all_users' }
     }
 };

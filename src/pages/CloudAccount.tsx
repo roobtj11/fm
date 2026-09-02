@@ -15,6 +15,7 @@ export default function CloudAccount() {
         connecting: 'Connecting to your account…',
         saving: 'Saving your latest changes…',
         saved: 'All changes saved',
+        signed_out: 'Sign in to save to your account',
         offline: 'Offline — saved on this device',
         error: 'Saved on this device — sync needs attention',
     }[account.status];
@@ -46,7 +47,11 @@ export default function CloudAccount() {
                             </p>
                         </div>
                     </div>
-                    {(account.status === 'error' || account.status === 'offline') && (
+                    {account.status === 'signed_out' ? (
+                        <a href="/signin-with-chatgpt?return_to=/" target="_top" className="inline-flex items-center gap-2 rounded-lg bg-cyan-400 px-4 py-2 text-sm font-black text-slate-950 hover:bg-cyan-300">
+                            Sign in with ChatGPT
+                        </a>
+                    ) : (account.status === 'error' || account.status === 'offline') && (
                         <button
                             type="button"
                             onClick={account.retry}
@@ -59,7 +64,7 @@ export default function CloudAccount() {
                 </div>
 
                 <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                    <InfoCard label="Automatic account saving" value={isHealthy ? 'On' : 'Waiting to reconnect'} />
+                    <InfoCard label="Automatic account saving" value={isHealthy ? 'On' : account.status === 'signed_out' ? 'Sign in required' : 'Waiting to reconnect'} />
                     <InfoCard label="Last saved to account" value={formatDate(account.lastSavedAt)} />
                 </div>
 

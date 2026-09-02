@@ -10,6 +10,7 @@ import { StatsSummaryPanel } from '../Profile/StatsSummaryPanel';
 import { cn } from '../../lib/utils';
 import { formatVersion } from '../../lib/formatVersion';
 import { getAnvilTexturePath } from '../../utils/ascensionUtils';
+import { useCloudSync } from '../../context/CloudSyncContext';
 
 const formatVersionDate = (version: string): string => {
     const parts = version.split('_');
@@ -41,6 +42,7 @@ const formatVersionDate = (version: string): string => {
 export default function AppShell() {
     const { selectedVersion, versions, isLoadingVersions } = useGameDataContext();
     const { profile } = useProfile();
+    const account = useCloudSync();
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [isStatsOpen, setIsStatsOpen] = useState(false);
     const [showVersionPopup, setShowVersionPopup] = useState(false);
@@ -129,6 +131,13 @@ export default function AppShell() {
                     onMenuToggle={() => setIsSidebarOpen(!isSidebarOpen)}
                     onStatsToggle={() => setIsStatsOpen(!isStatsOpen)}
                 />
+
+                {account.status === 'signed_out' && (
+                    <div className="flex flex-wrap items-center justify-center gap-3 border-b border-cyan-700/60 bg-cyan-950/80 px-4 py-2 text-center text-sm text-cyan-100">
+                        <span>ForgeMaster is public. Sign in so your profiles stay private to your account and sync across devices.</span>
+                        <a href="/signin-with-chatgpt?return_to=/" target="_top" className="rounded-lg bg-cyan-400 px-3 py-1.5 font-black text-slate-950 hover:bg-cyan-300">Sign in with ChatGPT</a>
+                    </div>
+                )}
 
                 {/* Page Content */}
                 <main className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar pb-20">

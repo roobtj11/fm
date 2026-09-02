@@ -11,7 +11,7 @@ import {
 import type { UserProfile } from '../types/Profile';
 import { useProfile } from './ProfileContext';
 
-type SyncStatus = 'connecting' | 'saving' | 'saved' | 'offline' | 'error';
+type SyncStatus = 'connecting' | 'saving' | 'saved' | 'signed_out' | 'offline' | 'error';
 
 interface AccountUser {
     id: string;
@@ -50,7 +50,9 @@ async function accountRequest(init?: RequestInit): Promise<AccountResponse> {
     });
     const payload = await response.json().catch(() => null) as (AccountResponse & { error?: string }) | null;
     if (!response.ok || !payload) {
-        throw new Error(payload?.error || 'Account sync is temporarily unavailable.');
+        const error = new Error(payload?.error || 'Account sync is temporarily unavailable.') as Error & { status?: number };
+        error.status = response.status;
+        throw error;
     }
     return payload;
 }
@@ -108,7 +110,7 @@ export function CloudSyncProvider({ children }: { children: ReactNode }) {
                 if (cancelled) return;
                 const message = caught instanceof Error ? caught.message : 'Account sync is temporarily unavailable.';
                 setError(message);
-                setStatus(navigator.onLine ? 'error' : 'offline');
+                setStatus((caught as Error & { status?: number })?.status === 401 ? 'signed_out' : navigator.onLine ? 'error' : 'offline');
             }
         };
 

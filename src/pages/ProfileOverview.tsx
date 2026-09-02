@@ -78,6 +78,7 @@ export default function ProfileOverview() {
 
     const accountStatus = {
         connecting: 'Connecting…', saving: 'Saving…', saved: 'Saved',
+        signed_out: 'Sign in to sync',
         offline: 'Safe on this device', error: 'Sync needs attention',
     }[account.status];
 

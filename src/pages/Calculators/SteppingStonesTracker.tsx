@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
     ArrowDown,
@@ -42,6 +42,8 @@ const SCOPE_OPTIONS: { id: SteppingStonePredictionScope; label: string; descript
     { id: 'whole_run', label: 'Whole run', description: 'Uses one combined Up/Down history from every hop.' },
     { id: 'per_stone', label: 'Per hop', description: 'Hop 1, Hop 2, and every later hop learn independently.' },
 ];
+
+type SharedAggregate = { stone: number; choice: SteppingStoneChoice; attempts: number | string; safe: number | string };
 
 const newId = (prefix: string) =>
     `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -121,7 +123,10 @@ export default function SteppingStonesTracker() {
     const tracker = profile.misc.steppingStones ?? EMPTY_TRACKER;
     const predictionModel = tracker.predictionModel ?? 'balanced_bayesian';
     const predictionScope = tracker.predictionScope ?? 'per_stone';
+    const dataSource = tracker.dataSource ?? 'all_users';
+    const contributionEnabled = profile.misc.steppingStoneContributionEnabled !== false;
     const [choice, setChoice] = useState<SteppingStoneChoice | null>(null);
+    const [sharedAggregates, setSharedAggregates] = useState<SharedAggregate[]>([]);
 
     const currentAttempt = tracker.attempts.find(
         attempt => attempt.id === tracker.currentAttemptId,
@@ -134,6 +139,26 @@ export default function SteppingStonesTracker() {
         () => tracker.attempts.flatMap(attempt => attempt.entries),
         [tracker.attempts],
     );
+
+    const refreshShared = async () => {
+        const response = await fetch('/api/shared-stepping-stones').catch(() => null);
+        if (!response?.ok) return;
+        const payload = await response.json().catch(() => null) as { aggregates?: SharedAggregate[] } | null;
+        setSharedAggregates(payload?.aggregates || []);
+    };
+
+    useEffect(() => { void refreshShared(); }, []);
+
+    useEffect(() => {
+        if (!contributionEnabled || !allEntries.length) return;
+        const timeout = window.setTimeout(async () => {
+            const response = await fetch('/api/shared-stepping-stones', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ entries: allEntries }),
+            }).catch(() => null);
+            if (response?.ok) void refreshShared();
+        }, 900);
+        return () => window.clearTimeout(timeout);
+    }, [allEntries, contributionEnabled]);
 
     const stats = useMemo(() => {
         const up = getDirectionStats(allEntries, 'up');
@@ -187,14 +212,35 @@ export default function SteppingStonesTracker() {
         updateNestedProfile('misc', { steppingStones: next });
     };
 
+    const sharedDirection = (direction: SteppingStoneChoice, stone?: number): DirectionStats => {
+        const matching = sharedAggregates.filter(row => row.choice === direction && (stone === undefined || Number(row.stone) === stone));
+        const total = matching.reduce((sum, row) => sum + Number(row.attempts || 0), 0);
+        const safe = matching.reduce((sum, row) => sum + Number(row.safe || 0), 0);
+        return { total, safe, successRate: rate(safe, total), interval: wilsonInterval(safe, total) };
+    };
+
+    const combineDirection = (a: DirectionStats, b: DirectionStats): DirectionStats => {
+        const total = a.total + b.total;
+        const safe = a.safe + b.safe;
+        return { total, safe, successRate: rate(safe, total), interval: wilsonInterval(safe, total) };
+    };
+
     const recommendation = useMemo<StoneRecommendation>(() => {
         const stoneStats = stats.perStone[currentStone - 1];
         const upStone = stoneStats?.up ?? getDirectionStats([], 'up');
         const downStone = stoneStats?.down ?? getDirectionStats([], 'down');
-        const scopeUp = predictionScope === 'per_stone' ? upStone : stats.up;
-        const scopeDown = predictionScope === 'per_stone' ? downStone : stats.down;
+        const myUp = predictionScope === 'per_stone' ? upStone : stats.up;
+        const myDown = predictionScope === 'per_stone' ? downStone : stats.down;
+        const communityUp = sharedDirection('up', predictionScope === 'per_stone' ? currentStone : undefined);
+        const communityDown = sharedDirection('down', predictionScope === 'per_stone' ? currentStone : undefined);
+        const communityHasData = communityUp.total + communityDown.total > 0;
+        const scopeUp = dataSource === 'my_data' || (dataSource === 'all_users' && !communityHasData)
+            ? myUp : dataSource === 'combined' ? combineDirection(myUp, communityUp) : communityUp;
+        const scopeDown = dataSource === 'my_data' || (dataSource === 'all_users' && !communityHasData)
+            ? myDown : dataSource === 'combined' ? combineDirection(myDown, communityDown) : communityDown;
         const scopeSamples = scopeUp.total + scopeDown.total;
-        const scopeName = predictionScope === 'per_stone' ? `hop ${currentStone}` : 'the whole run';
+        const populationName = dataSource === 'my_data' ? 'your data' : dataSource === 'combined' ? 'your and community data' : communityHasData ? 'community data' : 'your data (community sample is empty)';
+        const scopeName = `${predictionScope === 'per_stone' ? `hop ${currentStone}` : 'the whole run'} using ${populationName}`;
 
         // Laplace smoothing prevents one lucky result from becoming a 0%/100% prediction.
         const smoothed = (direction: DirectionStats) =>
@@ -254,7 +300,7 @@ export default function SteppingStonesTracker() {
             confidence: 'Early signal',
             reason: `The sample for ${scopeName} is still small, so treat this as an early signal.`,
         };
-    }, [currentStone, predictionModel, predictionScope, stats.down, stats.perStone, stats.up, tracker.attempts.length]);
+    }, [currentStone, dataSource, predictionModel, predictionScope, sharedAggregates, stats.down, stats.perStone, stats.up, tracker.attempts.length]);
 
     const startAttempt = () => {
         if (currentAttempt) return;
@@ -341,7 +387,7 @@ export default function SteppingStonesTracker() {
 
     const resetHistory = () => {
         if (!window.confirm('Delete all Stepping Stones attempt history for this profile?')) return;
-        saveTracker({ ...EMPTY_TRACKER, targetStones: tracker.targetStones, predictionModel, predictionScope });
+        saveTracker({ ...EMPTY_TRACKER, targetStones: tracker.targetStones, predictionModel, predictionScope, dataSource });
         setChoice(null);
         toast.success('Stepping Stones history cleared.');
     };
@@ -379,8 +425,13 @@ export default function SteppingStonesTracker() {
     const difference = Math.abs(stats.up.successRate - stats.down.successRate);
     const evidenceIsWeak = stats.pValue === null || stats.pValue >= 0.05 || !enoughSamples;
     const currentScopeRow = stats.perStone[currentStone - 1];
-    const balanceUp = predictionScope === 'per_stone' ? currentScopeRow?.up ?? getDirectionStats([], 'up') : stats.up;
-    const balanceDown = predictionScope === 'per_stone' ? currentScopeRow?.down ?? getDirectionStats([], 'down') : stats.down;
+    const myBalanceUp = predictionScope === 'per_stone' ? currentScopeRow?.up ?? getDirectionStats([], 'up') : stats.up;
+    const myBalanceDown = predictionScope === 'per_stone' ? currentScopeRow?.down ?? getDirectionStats([], 'down') : stats.down;
+    const communityBalanceUp = sharedDirection('up', predictionScope === 'per_stone' ? currentStone : undefined);
+    const communityBalanceDown = sharedDirection('down', predictionScope === 'per_stone' ? currentStone : undefined);
+    const hasCommunityBalance = communityBalanceUp.total + communityBalanceDown.total > 0;
+    const balanceUp = dataSource === 'my_data' || (dataSource === 'all_users' && !hasCommunityBalance) ? myBalanceUp : dataSource === 'combined' ? combineDirection(myBalanceUp, communityBalanceUp) : communityBalanceUp;
+    const balanceDown = dataSource === 'my_data' || (dataSource === 'all_users' && !hasCommunityBalance) ? myBalanceDown : dataSource === 'combined' ? combineDirection(myBalanceDown, communityBalanceDown) : communityBalanceDown;
     const choiceTotal = balanceUp.total + balanceDown.total;
     const upChoiceShare = choiceTotal ? balanceUp.total / choiceTotal : 0.5;
 
@@ -450,8 +501,29 @@ export default function SteppingStonesTracker() {
                                 {SCOPE_OPTIONS.map(scope => <button key={scope.id} type="button" onClick={() => saveTracker({ ...tracker, predictionScope: scope.id })} className={`rounded-xl border p-3 text-left transition ${predictionScope === scope.id ? 'border-amber-400 bg-amber-500/10' : 'border-slate-700 bg-slate-900/60 hover:border-slate-500'}`}><span className={`block text-sm font-bold ${predictionScope === scope.id ? 'text-amber-200' : 'text-white'}`}>{scope.label}</span><span className="mt-1 block text-xs leading-5 text-slate-400">{scope.description}</span></button>)}
                             </div>
                         </div>
+                        <div className="mt-4 border-t border-slate-700 pt-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div><h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Prediction data</h4><p className="mt-1 text-xs text-slate-500">Choose whose anonymous results the Up/Down model uses.</p></div>
+                                <label className="flex items-center gap-2 text-xs text-slate-300">
+                                    <input type="checkbox" checked={contributionEnabled} onChange={event => {
+                                        const enabled = event.target.checked;
+                                        updateNestedProfile('misc', { steppingStoneContributionEnabled: enabled });
+                                        if (!enabled) void fetch('/api/shared-stepping-stones', { method: 'DELETE' }).then(() => refreshShared()).catch(() => undefined);
+                                    }} className="accent-cyan-400" />
+                                    Contribute anonymously
+                                </label>
+                            </div>
+                            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                {[
+                                    ['my_data', 'My data', 'Only this profile history.'],
+                                    ['all_users', 'All users', 'Anonymous community aggregate.'],
+                                    ['combined', 'Combined', 'Your history plus the community.'],
+                                ].map(([id, label, description]) => <button key={id} type="button" onClick={() => saveTracker({ ...tracker, dataSource: id as SteppingStonesTracker['dataSource'] })} className={`rounded-xl border p-3 text-left transition ${dataSource === id ? 'border-fuchsia-400 bg-fuchsia-500/10' : 'border-slate-700 bg-slate-900/60 hover:border-slate-500'}`}><span className={`block text-sm font-bold ${dataSource === id ? 'text-fuchsia-200' : 'text-white'}`}>{label}</span><span className="mt-1 block text-xs leading-5 text-slate-400">{description}</span></button>)}
+                            </div>
+                            <p className="mt-2 text-[11px] leading-5 text-slate-500">Sharing is on by default. Only stone number, direction, and safe/fall outcome are contributed; your profile and identity are never shown.</p>
+                        </div>
                         <div className="mt-4">
-                            <div className="mb-2 text-xs font-semibold text-slate-400">{predictionScope === 'per_stone' ? `Hop ${currentStone} choice balance` : 'Whole-run choice balance'}</div>
+                            <div className="mb-2 text-xs font-semibold text-slate-400">{predictionScope === 'per_stone' ? `Hop ${currentStone} choice balance` : 'Whole-run choice balance'} · {dataSource === 'my_data' ? 'my data' : dataSource === 'combined' ? 'combined' : hasCommunityBalance ? 'all users' : 'my data fallback'}</div>
                             <div className="flex justify-between text-xs font-semibold"><span className="text-emerald-300">Up {balanceUp.total} · {percent(upChoiceShare)}</span><span className="text-violet-300">Down {balanceDown.total} · {percent(1 - upChoiceShare)}</span></div>
                             <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-slate-800"><div className="bg-emerald-500 transition-all" style={{ width: `${upChoiceShare * 100}%` }} /><div className="flex-1 bg-violet-500" /></div>
                             <p className="mt-2 text-xs text-slate-500">This balances recorded choices, not successful outcomes. Successes are never intentionally forced to match.</p>
