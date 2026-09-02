@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import {
-    ArrowRightLeft, Calculator, Check, PackagePlus, PawPrint, RotateCcw,
-    Shield, Sparkles, Sword, Target, Trash2, Trophy
+    ArrowRightLeft, Calculator, Check, Loader2, PackagePlus, PawPrint, RotateCcw,
+    ScanLine, Shield, Sparkles, Sword, Target, Trash2, Trophy
 } from 'lucide-react';
 import { useProfile } from '../../context/ProfileContext';
 import { useProfileOptimizer } from '../../hooks/useProfileOptimizer';
@@ -23,6 +23,8 @@ import { getMainBattleStageSummary, simulateBattleMulti, type BattleResult } fro
 import { cn } from '../../lib/utils';
 import { BuildGoalSelector } from '../../components/Profile/BuildGoalSelector';
 import { compareBuildGoal, resolveBuildGoal, scoreBuildGoal, type BuildGoalContext, type BuildGoalDefinition } from '../../utils/buildGoals';
+import { recognizeLocally } from '../../utils/localOcr';
+import { scanKnownEquipmentItems } from '../../utils/screenshotItemScanner';
 
 type EquipmentSlot = keyof UserProfile['items'];
 type CompanionLoadout = { pets: PetSlot[]; mount: MountSlot | null };
@@ -43,6 +45,13 @@ const EQUIPMENT_SLOTS: EquipmentSlot[] = [
 
 const newInstanceId = (prefix: 'pet' | 'mount') =>
     `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+const readImage = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('The screenshot could not be opened.'));
+    reader.readAsDataURL(file);
+});
 
 function describeSubstats(stats?: { statId: string; value: number }[]) {
     if (!stats?.length) return 'No special stats';
@@ -110,6 +119,7 @@ export default function SwapTest() {
     const { optimizeLoadout, calculateProfileStats, isReady } = useProfileOptimizer();
     const { data: petLibrary } = useGameData<any>('PetLibrary.json');
     const { data: secondaryStatLibrary } = useGameData<any>('SecondaryStatLibrary.json');
+    const { data: autoItemMapping } = useGameData<any>('AutoItemMapping.json');
     const {
         libs: battleLibs,
         getBattleCountForAge,
@@ -134,6 +144,11 @@ export default function SwapTest() {
     const [itemModalOpen, setItemModalOpen] = useState(false);
     const [petModalOpen, setPetModalOpen] = useState(false);
     const [mountModalOpen, setMountModalOpen] = useState(false);
+    const swapScanRef = useRef<HTMLInputElement>(null);
+    const [swapScanBusy, setSwapScanBusy] = useState(false);
+    const [swapScanProgress, setSwapScanProgress] = useState(0);
+    const [swapScanError, setSwapScanError] = useState('');
+    const [swapScanSummary, setSwapScanSummary] = useState('');
 
     const currentItem = profile.items[slot];
     const savedPets = profile.pets.savedBuilds || [];
@@ -144,6 +159,45 @@ export default function SwapTest() {
         [stageAge, stageBattle, stageDifficulty, battleLibs]
     );
     const activeBuildGoal = useMemo(() => resolveBuildGoal(profile.misc.buildGoals), [profile.misc.buildGoals]);
+
+    const scanSwapScreenshot = async (file?: File) => {
+        if (!file) return;
+        setSwapScanError('');
+        setSwapScanSummary('');
+        if (!file.type.startsWith('image/')) return setSwapScanError('Choose a PNG, JPG, or WEBP screenshot.');
+        if (file.size > 10 * 1024 * 1024) return setSwapScanError('The screenshot must be smaller than 10 MB.');
+        setSwapScanBusy(true);
+        setSwapScanProgress(0);
+        try {
+            const image = await readImage(file);
+            const ocr = await recognizeLocally(image, message => setSwapScanProgress(Math.round((message.progress || 0) * 100)));
+            const detected = scanKnownEquipmentItems(ocr.text, autoItemMapping);
+            const grouped = EQUIPMENT_SLOTS.map(equipmentSlot => ({
+                slot: equipmentSlot,
+                items: detected.filter(match => match.slot === equipmentSlot),
+            })).filter(group => group.items.length >= 2).sort((a, b) => b.items.length - a.items.length);
+            const group = grouped[0];
+            if (!group) throw new Error('I could not find two known items for the same equipment slot. Use a screenshot where both item names and details are visible.');
+            const equipped = profile.items[group.slot];
+            const equippedIndex = equipped
+                ? group.items.findIndex(match => match.item.age === equipped.age && match.item.idx === equipped.idx)
+                : -1;
+            if (equippedIndex < 0) {
+                throw new Error(`I found ${group.items.map(match => match.name).join(' and ')} for ${group.slot}, but neither matches the ${group.slot} saved in your profile. Update your equipped item first, or add the test item manually.`);
+            }
+            const proposed = group.items.find((_, index) => index !== equippedIndex);
+            if (!proposed) throw new Error('The new comparison item could not be separated from the equipped item.');
+            setSlot(group.slot);
+            setCandidate(proposed.item);
+            setResult(null);
+            setSwapScanSummary(`Detected ${group.items[equippedIndex].name} as equipped and loaded ${proposed.name} as the new ${group.slot}. Verify its level and special stats before running the test.`);
+        } catch (cause) {
+            setSwapScanError(cause instanceof Error ? cause.message : 'The swap screenshot could not be read.');
+        } finally {
+            setSwapScanBusy(false);
+            if (swapScanRef.current) swapScanRef.current.value = '';
+        }
+    };
 
     useEffect(() => {
         if (!battleDataLoading && stageBattle >= battleCount) setStageBattle(Math.max(0, battleCount - 1));
@@ -373,7 +427,23 @@ export default function SwapTest() {
             <section className="bg-bg-card/60 rounded-2xl border border-border p-4 md:p-6 space-y-5">
                 <div>
                     <h2 className="text-xl font-bold text-text-primary">1. Enter the item to test</h2>
-                    <p className="text-xs text-text-muted mt-1">Pick the equipment slot, then use the same item editor as your profile.</p>
+                    <p className="text-xs text-text-muted mt-1">Scan a game comparison showing both item names, or pick the slot and enter the new item manually.</p>
+                </div>
+
+                <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <div className="flex items-center gap-2 font-bold text-text-primary"><ScanLine className="h-4 w-4 text-cyan-300" /> Scan equipped + new item</div>
+                            <p className="mt-1 max-w-2xl text-xs leading-5 text-text-muted">Local OCR matches both names against current game items, uses the names to determine the slot, confirms which one is equipped in your profile, and fills the other as the test item.</p>
+                        </div>
+                        <button type="button" disabled={swapScanBusy || !autoItemMapping} onClick={() => swapScanRef.current?.click()} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-2.5 text-sm font-black text-slate-950 hover:bg-cyan-300 disabled:opacity-40">
+                            {swapScanBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
+                            {swapScanBusy ? `Reading${swapScanProgress ? ` ${swapScanProgress}%` : '…'}` : 'Choose swap screenshot'}
+                        </button>
+                        <input ref={swapScanRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={event => void scanSwapScreenshot(event.target.files?.[0])} />
+                    </div>
+                    {swapScanSummary && <p className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs leading-5 text-emerald-200">{swapScanSummary}</p>}
+                    {swapScanError && <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-5 text-amber-200">{swapScanError}</p>}
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">

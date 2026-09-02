@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Camera, Check, CopyCheck, Crop, Loader2, Plus, ScanLine, Trash2, Upload } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { useProfile } from '../context/ProfileContext';
@@ -27,6 +27,7 @@ type Recognition = {
 };
 
 type DraftCorrection = { field: ScannerTrainingField; region: OcrRegion; correctedValue: string };
+type QueuedImage = { id: string; name: string; dataUrl: string };
 
 const makeId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -126,6 +127,10 @@ export default function CompanionImport() {
     const [scanFailed, setScanFailed] = useState(false);
     const [corrections, setCorrections] = useState<DraftCorrection[]>([]);
     const [aspectRatio, setAspectRatio] = useState(1);
+    const [queue, setQueue] = useState<QueuedImage[]>([]);
+    const [queueIndex, setQueueIndex] = useState(0);
+    const [autoAnalyzeNext, setAutoAnalyzeNext] = useState(false);
+    const [importedCount, setImportedCount] = useState(0);
 
     const statIds = useMemo(() => Object.keys(secondaryStatLibrary || {}), [secondaryStatLibrary]);
     const availableNames = useMemo(() => {
@@ -163,22 +168,38 @@ export default function CompanionImport() {
             && JSON.stringify(normalizedStats(item.secondaryStats || [])) === candidate);
     }, [profile, result, selectedMatch]);
 
-    const chooseFile = (file?: File) => {
-        if (!file) return;
+    const showQueuedImage = (images: QueuedImage[], index: number) => {
+        const queued = images[index];
+        if (!queued) return;
+        setPreview(queued.dataUrl);
+        setImageDataUrl(queued.dataUrl);
+        setResult(null);
+        setCorrections([]);
+        setScanFailed(false);
+        const image = new Image();
+        image.onload = () => setAspectRatio(image.naturalWidth / Math.max(1, image.naturalHeight));
+        image.src = queued.dataUrl;
+    };
+
+    const chooseFiles = async (files?: FileList | File[]) => {
+        const selected = Array.from(files || []).slice(0, 30);
+        if (!selected.length) return;
         setError('');
         setResult(null);
-        if (!file.type.startsWith('image/')) return setError('Choose a PNG, JPG, or WEBP screenshot.');
-        if (file.size > 10 * 1024 * 1024) return setError('The screenshot must be smaller than 10 MB.');
-        const reader = new FileReader();
-        reader.onload = () => {
-            const value = String(reader.result || '');
-            setPreview(value);
-            setImageDataUrl(value);
-            const image = new Image();
-            image.onload = () => setAspectRatio(image.naturalWidth / Math.max(1, image.naturalHeight));
-            image.src = value;
-        };
-        reader.readAsDataURL(file);
+        const valid = selected.filter(file => file.type.startsWith('image/') && file.size <= 10 * 1024 * 1024);
+        if (!valid.length) return setError('Choose PNG, JPG, or WEBP screenshots smaller than 10 MB each.');
+        if (valid.length !== selected.length) setError(`${selected.length - valid.length} unsupported or oversized image(s) were skipped.`);
+        const images = await Promise.all(valid.map(file => new Promise<QueuedImage>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve({ id: makeId(), name: file.name, dataUrl: String(reader.result || '') });
+            reader.onerror = () => reject(new Error(`${file.name} could not be opened.`));
+            reader.readAsDataURL(file);
+        }))).catch(cause => { setError(cause instanceof Error ? cause.message : 'The images could not be opened.'); return []; });
+        if (!images.length) return;
+        setQueue(images);
+        setQueueIndex(0);
+        setImportedCount(0);
+        showQueuedImage(images, 0);
     };
 
     const analyze = async () => {
@@ -226,6 +247,29 @@ export default function CompanionImport() {
         } finally {
             setBusy(false);
         }
+    };
+
+    useEffect(() => {
+        if (!autoAnalyzeNext || !imageDataUrl || busy) return;
+        setAutoAnalyzeNext(false);
+        void analyze();
+    // The queued image change is the deliberate trigger; analyze uses the current scanner state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [autoAnalyzeNext, imageDataUrl]);
+
+    const finishCurrent = (imported: boolean) => {
+        const nextIndex = queueIndex + 1;
+        if (imported) setImportedCount(count => count + 1);
+        if (nextIndex < queue.length) {
+            setQueueIndex(nextIndex);
+            showQueuedImage(queue, nextIndex);
+            setAutoAnalyzeNext(true);
+            return;
+        }
+        setResult(null); setPreview(''); setImageDataUrl(''); setCorrections([]); setScanFailed(false);
+        setQueue([]); setQueueIndex(0); setAutoAnalyzeNext(false);
+        if (fileRef.current) fileRef.current.value = '';
+        toast.success(imported ? `Batch complete — ${importedCount + 1} image(s) imported.` : `Batch complete — ${importedCount} image(s) imported.`);
     };
 
     const startManual = () => {
@@ -311,8 +355,8 @@ export default function CompanionImport() {
             };
             updateNestedProfile('savedItems', { [slot]: [...(profile.savedItems?.[slot] || []), item] });
             toast.success(`${result.name} added to saved ${slot} items`);
-            setResult(null); setPreview(''); setImageDataUrl(''); setCorrections([]); setScanFailed(false); setBusy(false);
-            if (fileRef.current) fileRef.current.value = '';
+            setBusy(false);
+            finishCurrent(true);
             return;
         }
         const common = {
@@ -327,12 +371,12 @@ export default function CompanionImport() {
             updateNestedProfile('mount', { savedBuilds: [...profile.mount.savedBuilds, mount] });
         }
         toast.success(`${result.name} added to My ${result.kind === 'pet' ? 'Pets' : 'Mounts'}`);
-        setResult(null); setPreview(''); setImageDataUrl(''); setCorrections([]); setScanFailed(false); setBusy(false);
-        if (fileRef.current) fileRef.current.value = '';
+        setBusy(false);
+        finishCurrent(true);
     };
 
     return <div className="mx-auto max-w-6xl space-y-6 pb-20">
-        <header className="border-b border-border pb-6"><h1 className="flex items-center gap-3 text-3xl font-black text-text-primary"><Camera className="h-8 w-8 text-accent-primary" />Screenshot Import</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">Upload a detailed equipment, pet, or mount card. Free local OCR reads it inside your browser—no AI, tokens, or per-image charge. If automatic reading fails, you can mark only the missing regions and teach the scanner that layout.</p></header>
+        <header className="border-b border-border pb-6"><h1 className="flex items-center gap-3 text-3xl font-black text-text-primary"><Camera className="h-8 w-8 text-accent-primary" />Screenshot Import</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">Select up to 30 equipment, pet, or mount screenshots at once. Free local OCR works through the batch inside your browser—no AI, tokens, or per-image charge. Review each result; after import, the next image scans automatically.</p></header>
         <div className="grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
             <section className="space-y-4 rounded-2xl border border-border bg-bg-card/70 p-5">
                 <label className="flex items-start gap-3 rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-3 text-xs text-text-secondary">
@@ -343,13 +387,14 @@ export default function CompanionImport() {
                     }} className="mt-0.5 accent-cyan-400" />
                     <span><strong className="block text-text-primary">Improve scanning for everyone</strong><span className="mt-1 block leading-5">On by default. If automatic scanning fails and you correct it, only the field, crop coordinates, OCR text, and corrected game value are shared anonymously. The screenshot never leaves your device.</span></span>
                 </label>
-                <div onClick={() => fileRef.current?.click()} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); chooseFile(event.dataTransfer.files[0]); }} className="flex min-h-72 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-border bg-black/15 text-center hover:border-accent-primary/60">
-                    {preview ? <img src={preview} alt="Screenshot preview" className="max-h-[32rem] w-full object-contain" /> : <><Upload className="h-10 w-10 text-accent-primary" /><h2 className="mt-3 font-black text-text-primary">Drop a screenshot here</h2><p className="mt-1 text-xs text-text-muted">or click to choose PNG, JPG, or WEBP · 10 MB max</p></>}
+                <div onClick={() => fileRef.current?.click()} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); void chooseFiles(event.dataTransfer.files); }} className="flex min-h-72 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-border bg-black/15 text-center hover:border-accent-primary/60">
+                    {preview ? <div className="relative w-full"><img src={preview} alt="Screenshot preview" className="max-h-[32rem] w-full object-contain" />{queue.length > 1 && <span className="absolute left-2 top-2 rounded-full bg-black/80 px-3 py-1 text-xs font-black text-white">{queueIndex + 1} of {queue.length} · {queue[queueIndex]?.name}</span>}</div> : <><Upload className="h-10 w-10 text-accent-primary" /><h2 className="mt-3 font-black text-text-primary">Drop screenshots here</h2><p className="mt-1 text-xs text-text-muted">or click to choose up to 30 PNG, JPG, or WEBP files · 10 MB each</p></>}
                 </div>
-                <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={event => chooseFile(event.target.files?.[0])} />
-                <button onClick={analyze} disabled={!imageDataUrl || busy} className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent-primary px-4 py-3 font-black text-white disabled:opacity-40">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}{busy ? `Reading locally${progress ? ` · ${progress}%` : '…'}` : 'Read screenshot locally'}</button>
+                <input ref={fileRef} type="file" multiple accept="image/png,image/jpeg,image/webp" className="hidden" onChange={event => void chooseFiles(event.target.files || undefined)} />
+                <button onClick={analyze} disabled={!imageDataUrl || busy} className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent-primary px-4 py-3 font-black text-white disabled:opacity-40">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}{busy ? `Reading image ${queue.length ? queueIndex + 1 : 1}${progress ? ` · ${progress}%` : '…'}` : queue.length > 1 ? `Start batch of ${queue.length}` : 'Read screenshot locally'}</button>
                 {busy && <div className="space-y-1"><div className="h-1.5 overflow-hidden rounded-full bg-black/30"><div className="h-full bg-accent-primary transition-all" style={{ width: `${progress}%` }} /></div><p className="text-center text-[10px] capitalize text-text-muted">{progressLabel || 'Preparing OCR'}</p></div>}
                 <button onClick={startManual} disabled={busy} className="w-full rounded-xl border border-border px-4 py-2.5 text-sm font-bold text-text-secondary hover:border-accent-primary/50 hover:text-text-primary disabled:opacity-40">Enter manually instead</button>
+                {queue.length > 1 && <button onClick={() => finishCurrent(false)} disabled={busy} className="w-full rounded-xl border border-border px-4 py-2.5 text-sm font-bold text-text-muted hover:border-amber-400/50 hover:text-amber-200 disabled:opacity-40">Skip this image · {queue.length - queueIndex - 1} remaining</button>}
                 {error && <div className="flex gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div>}
             </section>
 
