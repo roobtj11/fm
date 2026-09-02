@@ -63,8 +63,8 @@ export default function AppShell() {
     };
 
     const maxAgeVisuals = useMemo(() => {
-        // profile.misc.forgeLevel is 0-indexed (0 = Lvl 1 in UI)
-        const uiLevel = (profile.misc.forgeLevel || 0) + 1;
+        // The profile stores the exact one-based level displayed in the game.
+        const uiLevel = Math.max(1, profile.misc.forgeLevel || 1);
 
         // Determine max age index based on level (Thresholds from forgeData.ts)
         let ageIdx = 0;

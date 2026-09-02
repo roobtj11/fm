@@ -5,7 +5,7 @@ import { useForgeUpgradeStats } from '../../hooks/useForgeCalculator';
 import { Card } from '../UI/Card';
 import { Button } from '../UI/Button';
 import { SpriteIcon } from '../UI/SpriteIcon';
-import { Plus, Minus, Sparkles } from 'lucide-react';
+import { Plus, Minus, Sparkles, Info } from 'lucide-react';
 import { AscensionStars } from '../UI/AscensionStars';
 import { getAnvilTexturePath } from '../../utils/ascensionUtils';
 import { useGameDataContext } from '../../context/GameDataContext';
@@ -30,13 +30,8 @@ export function MiscPanel() {
     // If there are 34 upgrade entries, it means we can reach Level 35
     const maxForgeLevel = forgeData ? Math.max(...Object.keys(forgeData).map(Number)) + 1 : 99;
 
-    // Fix for "off by one" error reported by user.
-    // Updated usage: Hook now expects the Level Key directly.
-    // If we are Level 22, we want to see upgrade 22->23? Or 21->22?
-    // Profile Level 21 means I have completed 21?
-    // Usually "Level 21" means I am at 21, next upgrade is 21 -> 22.
-    // Excel 21->22 is Key 21.
-    // So if Level=21, pass 21.
+    // The profile value is the exact one-based level shown in the game. When the
+    // current upgrade is already running, the card previews the following level.
     const [isNextLevelStarted, setIsNextLevelStarted] = useState(false);
     const upgradeStats = useForgeUpgradeStats(profile.misc.forgeLevel + (isNextLevelStarted ? 1 : 0));
 
@@ -74,8 +69,8 @@ export function MiscPanel() {
                             <img src={getAnvilTexturePath(profile.misc.forgeAscensionLevel || 0, selectedVersion)} alt="Forge" className="w-full h-full object-contain" />
                         </div>
                         <div className="flex-1">
-                            <div className="font-bold">Forge Level</div>
-                            <div className="text-xs text-text-muted">Affects enhancement costs</div>
+                            <div className="font-bold">Current Forge Level</div>
+                            <div className="text-xs text-text-muted">Enter the exact level displayed in the game</div>
                         </div>
                         <AscensionStars
                             value={profile.misc.forgeAscensionLevel || 0}
@@ -119,16 +114,25 @@ export function MiscPanel() {
                         </Button>
                     </div>
 
-                    {/* Next Level Toggle */}
-                    <div className="mt-2 flex items-center gap-2 justify-center">
-                        <label className="flex items-center gap-2 cursor-pointer text-xs text-text-muted select-none hover:text-text-primary transition-colors">
+                    <div className="mt-3 rounded-lg border border-border/70 bg-bg-primary/30 p-3">
+                        <div className="flex items-start gap-2">
+                            <Info className="mt-0.5 h-4 w-4 shrink-0 text-accent-primary" />
+                            <div className="text-[11px] leading-5 text-text-muted">
+                                <div className="font-bold text-text-primary">You are currently Forge Level {profile.misc.forgeLevel}.</div>
+                                <div>The normal next upgrade is Level {profile.misc.forgeLevel} → {profile.misc.forgeLevel + 1}. Turn the option below on only if that upgrade is already running in the game.</div>
+                            </div>
+                        </div>
+                        <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-md border border-border bg-bg-input/50 p-2.5 text-xs text-text-secondary transition-colors hover:text-text-primary">
                             <input
                                 type="checkbox"
                                 checked={isNextLevelStarted}
                                 onChange={(e) => setIsNextLevelStarted(e.target.checked)}
-                                className="w-3 h-3 rounded border-border bg-bg-input text-accent-primary focus:ring-0 focus:ring-offset-0"
+                                className="mt-0.5 h-3.5 w-3.5 rounded border-border bg-bg-input text-accent-primary focus:ring-0 focus:ring-offset-0"
                             />
-                            Already started current level?
+                            <span>
+                                <span className="block font-bold text-text-primary">Level {profile.misc.forgeLevel} → {profile.misc.forgeLevel + 1} is already underway</span>
+                                <span className="mt-0.5 block text-[10px] leading-4 text-text-muted">When checked, the estimates below skip that committed upgrade and show Level {profile.misc.forgeLevel + 1} → {profile.misc.forgeLevel + 2}.</span>
+                            </span>
                         </label>
                     </div>
 
@@ -138,7 +142,7 @@ export function MiscPanel() {
                             {/* Costs */}
                             <div className="grid grid-cols-2 gap-2">
                                 <div className="flex flex-col items-center bg-yellow-500/10 py-2 rounded border border-yellow-500/20">
-                                    <span className="text-yellow-500/80 font-bold mb-1">Total Cost</span>
+                                    <span className="text-yellow-500/80 font-bold mb-1">{isNextLevelStarted ? `Following ${profile.misc.forgeLevel + 1} → ${profile.misc.forgeLevel + 2}` : `Next ${profile.misc.forgeLevel} → ${profile.misc.forgeLevel + 1}`} Cost</span>
                                     <span className="font-bold text-yellow-400 text-sm">
                                         {new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(upgradeStats.cost)}
                                     </span>

@@ -92,7 +92,7 @@ export default function ProfileOverview() {
                             <p className="text-xs font-black uppercase tracking-[0.22em] text-accent-primary">ForgeMaster overview</p>
                             <h1 className="mt-1 text-3xl font-black text-text-primary sm:text-4xl">Welcome back, {profile.name}</h1>
                             <p className="mt-2 text-sm text-text-muted sm:text-base">
-                                Forge level {profile.misc.forgeLevel + 1} · {readiness}% loadout readiness
+                                Forge level {profile.misc.forgeLevel} · {readiness}% loadout readiness
                             </p>
                         </div>
                     </div>
