@@ -14,7 +14,7 @@ interface ColorStop {
 
 export default function Colors() {
     const { selectedVersion } = useGameDataContext();
-    const [text, setText] = useState("<sprite index=28''>1vcian.me/fm<sprite index=28''>");
+    const [text, setText] = useState("<sprite index=28''>ForgeMaster<sprite index=28''>");
     const [isGradient, setIsGradient] = useState(true);
     const [startColor, setStartColor] = useState('#ff0000');
     const [startAlpha, setStartAlpha] = useState(255);

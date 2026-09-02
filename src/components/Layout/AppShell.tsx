@@ -3,7 +3,7 @@ import { Outlet } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
-import { ExternalLink, Github, Sparkles } from 'lucide-react';
+import { ExternalLink, Sparkles } from 'lucide-react';
 import { useGameDataContext } from '../../context/GameDataContext';
 import { useProfile } from '../../context/ProfileContext';
 import { StatsSummaryPanel } from '../Profile/StatsSummaryPanel';
@@ -146,26 +146,13 @@ export default function AppShell() {
                     {/* Footer */}
                     <footer className="mt-12 py-6 border-t border-border text-center text-text-muted text-sm">
                         <div className="flex flex-col gap-2 items-center justify-center">
-                            <p>Forge Master Calculator &copy; {new Date().getFullYear()}</p>
-                            <div className="flex items-center justify-center gap-4">
-                                <a
-                                    href="https://1vcian.me"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="flex items-center gap-1.5 text-accent-primary hover:text-accent-secondary transition-colors"
-                                >
-                                    Visit My Website <ExternalLink className="w-3 h-3" />
-                                </a>
-                                <span className="text-border">|</span>
-                                <a
-                                    href="https://github.com/1vcian/fm"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="flex items-center gap-1.5 text-text-secondary hover:text-white transition-colors"
-                                >
-                                    GitHub <Github className="w-3 h-3" />
-                                </a>
-                            </div>
+                            <p>ForgeMaster &copy; {new Date().getFullYear()}</p>
+                            <p className="max-w-2xl text-xs leading-5 opacity-75">
+                                Original project and ongoing game-config updates by{' '}
+                                <a href="https://github.com/1vcian/fm" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-text-secondary hover:text-white">
+                                    1vcian <ExternalLink className="h-3 w-3" />
+                                </a>.
+                            </p>
                             {selectedVersion && (
                                 <div className="mt-2 text-xs opacity-70">
                                     Data Version: {formatVersion(selectedVersion)}
@@ -238,17 +225,9 @@ export default function AppShell() {
                                     </span>
                                 </p>
 
-                                <div className="text-xs text-text-muted text-center space-y-2 mt-1">
-                                    <p>
-                                        As you might have noticed, updates have been a bit slower lately. I've been extremely busy in my daily life recently, so I don't have much free time to actively code and implement new features. However, I will always do my best to keep the data updated for you all!
-                                    </p>
-                                    <p>
-                                        Special thanks to all the amazing supporters who buy me coffee and keep the furnace hot! ☕
-                                    </p>
-                                    <p className="font-bold text-accent-primary mt-2">
-                                        Much love, Lucian ❤️
-                                    </p>
-                                </div>
+                                <p className="text-xs leading-5 text-text-muted text-center">
+                                    ForgeMaster has loaded the newest available game data. Calculators and item values now use this configuration version.
+                                </p>
 
                                 <button
                                     onClick={handleClosePopup}

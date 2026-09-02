@@ -43,16 +43,6 @@ export default function PvpArena() {
                                 <span className="w-1.5 h-1.5 bg-red-500 rounded-full" />
                                 Work in Progress
                             </div>
-                            
-                            <a 
-                                href="https://github.com/1vcian/fm" 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="text-xs text-accent-primary hover:underline flex items-center gap-2 opacity-70 hover:opacity-100 transition-opacity"
-                            >
-                                <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" className="w-4 h-4 invert" alt="" />
-                                View progress on GitHub
-                            </a>
                         </div>
                     </div>
                 </div>

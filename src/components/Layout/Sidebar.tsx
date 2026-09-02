@@ -5,7 +5,7 @@ import { toast } from 'react-toastify';
 import { cn } from '../../lib/utils';
 import {
     Star, Egg, Key, Shirt, Cat, Image, ChevronDown,
-    Cpu, Swords, Shield, Lock, Coins, Palette, FileJson, HelpCircle, Github, TrendingUp, Hammer, Zap, ShoppingCart, Target, Sliders,
+    Cpu, Swords, Shield, Lock, Coins, Palette, FileJson, HelpCircle, TrendingUp, Hammer, Zap, ShoppingCart, Target, Sliders,
     Trash2, Check, Copy, Trophy, ArrowRightLeft, LayoutDashboard, Pencil, ScanLine
 } from 'lucide-react';
 import { GameIcon } from '../UI/GameIcon';
@@ -119,8 +119,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             items: [
                 { name: 'Gallery', path: '/gallery', icon: Image, theme: 'interstellar' },
                 { name: 'Configs', path: '/configs', icon: FileJson, theme: 'multiverse' },
-                { name: 'FAQ', path: '/faq', icon: HelpCircle, theme: 'quantum' },
-                { name: 'GitHub', path: 'https://github.com/1vcian/fm', icon: Github, external: true, theme: 'underworld' },
+                { name: 'Help & About', path: '/faq', icon: HelpCircle, theme: 'quantum' },
             ]
         }
     ];
@@ -396,12 +395,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                     })}
                 </div>
 
-                {/* Footer */}
-                <div className="p-4 border-t border-border space-y-4">
-                    <div className="text-[10px] text-text-muted text-center uppercase tracking-widest font-medium opacity-60">
-                        v2.2.0 • by <a href="https://1vcian.me" target="_blank" rel="noopener noreferrer" className="hover:text-accent-primary transition-colors font-bold">1vcian</a>
-                    </div>
-                </div>
+                <div className="p-3 border-t border-border text-center text-[10px] uppercase tracking-widest text-text-muted opacity-60">ForgeMaster</div>
             </aside>
         </>
     );
