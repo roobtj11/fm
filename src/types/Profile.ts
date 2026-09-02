@@ -112,6 +112,19 @@ export interface BuildGoalSettings {
     customGoals: CustomBuildGoal[];
 }
 
+export type ScannerTrainingField = 'kind' | 'name' | 'rarity' | 'level' | 'slot' | 'age' | 'stat_name' | 'stat_value';
+
+export interface ScannerTrainingExample {
+    id: string;
+    kind: 'item' | 'pet' | 'mount';
+    field: ScannerTrainingField;
+    region: { x: number; y: number; width: number; height: number };
+    aspectRatio: number;
+    observedText?: string;
+    correctedValue: string;
+    createdAt: string;
+}
+
 export interface UserProfile {
     id: string; // Unique identifier for the profile
     name: string;
@@ -224,6 +237,8 @@ export interface UserProfile {
             difficulty: number;
         };
         buildGoals?: BuildGoalSettings;
+        scannerTrainingExamples?: ScannerTrainingExample[];
+        scannerContributionEnabled?: boolean;
         lastManualBackupAt?: string;
     };
 }
@@ -309,6 +324,8 @@ export const INITIAL_PROFILE: UserProfile = {
         useSkinWindup: true,
         swapCalculatorStage: { age: 0, battle: 0, difficulty: 0 },
         buildGoals: { activeGoalId: 'balanced_late_game', customGoals: [] },
+        scannerTrainingExamples: [],
+        scannerContributionEnabled: true,
         steppingStones: { attempts: [], targetStones: 10 }
     }
 };
