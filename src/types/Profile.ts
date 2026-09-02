@@ -83,6 +83,35 @@ export interface SteppingStonesTracker {
     predictionScope?: SteppingStonePredictionScope;
 }
 
+export type BuildGoalMetric =
+    | 'real_dps' | 'real_hps' | 'total_health' | 'power'
+    | 'weapon_dps' | 'skill_dps' | 'farm_rate' | 'boss_rate'
+    | 'crit_chance' | 'crit_damage' | 'double_chance'
+    | 'lifesteal' | 'health_regen' | 'block_chance'
+    | 'attack_speed' | 'move_speed' | 'skill_cooldown';
+
+export interface BuildGoalRule {
+    metric: BuildGoalMetric;
+    weight: number;
+    target?: number;
+    minimum?: number;
+    maximum?: number;
+    required?: boolean;
+    ignored?: boolean;
+}
+
+export interface CustomBuildGoal {
+    id: string;
+    name: string;
+    description: string;
+    rules: BuildGoalRule[];
+}
+
+export interface BuildGoalSettings {
+    activeGoalId: string;
+    customGoals: CustomBuildGoal[];
+}
+
 export interface UserProfile {
     id: string; // Unique identifier for the profile
     name: string;
@@ -194,6 +223,7 @@ export interface UserProfile {
             battle: number;
             difficulty: number;
         };
+        buildGoals?: BuildGoalSettings;
         lastManualBackupAt?: string;
     };
 }
@@ -278,6 +308,7 @@ export const INITIAL_PROFILE: UserProfile = {
         techPlanMetadata: { isAuto: false },
         useSkinWindup: true,
         swapCalculatorStage: { age: 0, battle: 0, difficulty: 0 },
+        buildGoals: { activeGoalId: 'balanced_late_game', customGoals: [] },
         steppingStones: { attempts: [], targetStones: 10 }
     }
 };

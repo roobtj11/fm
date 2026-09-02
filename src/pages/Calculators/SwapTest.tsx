@@ -21,9 +21,10 @@ import { getPerfection } from '../../utils/itemCalculations';
 import { PerfectionMeter } from '../../components/UI/PerfectionMeter';
 import { getMainBattleStageSummary, simulateBattleMulti, type BattleResult } from '../../utils/BattleSimulator';
 import { cn } from '../../lib/utils';
+import { BuildGoalSelector } from '../../components/Profile/BuildGoalSelector';
+import { compareBuildGoal, resolveBuildGoal, scoreBuildGoal, type BuildGoalContext, type BuildGoalDefinition } from '../../utils/buildGoals';
 
 type EquipmentSlot = keyof UserProfile['items'];
-type Focus = 'balanced' | 'farm' | 'boss';
 type CompanionLoadout = { pets: PetSlot[]; mount: MountSlot | null };
 
 type SwapResult = {
@@ -39,12 +40,6 @@ type SwapResult = {
 const EQUIPMENT_SLOTS: EquipmentSlot[] = [
     'Weapon', 'Helmet', 'Body', 'Gloves', 'Belt', 'Necklace', 'Ring', 'Shoe'
 ];
-
-const FOCUS_LABELS: Record<Focus, string> = {
-    balanced: 'Balanced',
-    farm: 'Farming',
-    boss: 'Boss'
-};
 
 const newInstanceId = (prefix: 'pet' | 'mount') =>
     `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -91,11 +86,6 @@ function searchSize(profile: UserProfile) {
     return petSets * Math.max(1, mountKeys.size);
 }
 
-function farmKillsPerMinute(stats: AggregatedStats, enemyHealth: number, overheadSeconds: number) {
-    const fightSeconds = Math.max(0, enemyHealth) / Math.max(1, stats.realTotalDps);
-    return 60 / Math.max(0.01, fightSeconds + Math.max(0, overheadSeconds));
-}
-
 // These defaults mirror BattleEngine's current movement, spawn-distance, and wave-delay model.
 const BATTLE_TIMING = {
     playerSpeed: 4,
@@ -115,27 +105,6 @@ function estimatedTimeBetweenKills(stats: AggregatedStats, enemyCount: number, w
     return totalNonCombatTime / Math.max(1, enemyCount);
 }
 
-function bossSeconds(stats: AggregatedStats, bossHealth: number) {
-    return Math.max(0, bossHealth) / Math.max(1, stats.realTotalDps);
-}
-
-function focusScore(
-    focus: Focus,
-    stats: AggregatedStats,
-    enemyHealth: number,
-    bossHealth: number,
-    overheadSeconds: number
-) {
-    if (focus === 'farm') return farmKillsPerMinute(stats, enemyHealth, overheadSeconds);
-    if (focus === 'boss') return 1 / Math.max(0.000001, bossSeconds(stats, bossHealth));
-    return Math.sqrt(Math.max(0, stats.realTotalDps) * Math.max(0, stats.realTotalHps));
-}
-
-function percentChange(current: number, next: number) {
-    if (!Number.isFinite(current) || current === 0) return next === current ? 0 : 100;
-    return ((next - current) / Math.abs(current)) * 100;
-}
-
 export default function SwapTest() {
     const { profile, updateNestedProfile } = useProfile();
     const { optimizeLoadout, calculateProfileStats, isReady } = useProfileOptimizer();
@@ -150,7 +119,6 @@ export default function SwapTest() {
 
     const [slot, setSlot] = useState<EquipmentSlot>('Weapon');
     const [candidate, setCandidate] = useState<ItemSlot | null>(null);
-    const [focus, setFocus] = useState<Focus>('balanced');
     const [enemyHealth, setEnemyHealth] = useState(1_000_000);
     const [bossHealth, setBossHealth] = useState(10_000_000);
     const [overheadSeconds, setOverheadSeconds] = useState(0.35);
@@ -175,6 +143,7 @@ export default function SwapTest() {
         () => getMainBattleStageSummary(stageAge, stageBattle, stageDifficulty, battleLibs),
         [stageAge, stageBattle, stageDifficulty, battleLibs]
     );
+    const activeBuildGoal = useMemo(() => resolveBuildGoal(profile.misc.buildGoals), [profile.misc.buildGoals]);
 
     useEffect(() => {
         if (!battleDataLoading && stageBattle >= battleCount) setStageBattle(Math.max(0, battleCount - 1));
@@ -232,8 +201,13 @@ export default function SwapTest() {
             return;
         }
 
-        const metric = focus === 'balanced' ? 'balanced' : 'dps';
-        const currentBest = optimizeLoadout(metric, profile, respectSavedLevels);
+        const baselineStats = calculateProfileStats(profile);
+        const scoreForGoal = (stats: AggregatedStats) => scoreBuildGoal(activeBuildGoal, stats, baselineStats, {
+            enemyHealth,
+            bossHealth,
+            overheadSeconds: killDowntimeFor(stats),
+        });
+        const currentBest = optimizeLoadout('balanced', profile, respectSavedLevels, scoreForGoal);
         const currentLoadout: CompanionLoadout = currentBest || {
             pets: profile.pets.active,
             mount: profile.mount.active
@@ -244,7 +218,7 @@ export default function SwapTest() {
             ...profile,
             items: { ...profile.items, [slot]: candidate }
         };
-        const candidateBest = optimizeLoadout(metric, candidateProfile, respectSavedLevels);
+        const candidateBest = optimizeLoadout('balanced', candidateProfile, respectSavedLevels, scoreForGoal);
         const candidateLoadout: CompanionLoadout = candidateBest || {
             pets: candidateProfile.pets.active,
             mount: candidateProfile.mount.active
@@ -275,7 +249,7 @@ export default function SwapTest() {
         setAutoStageStats(true);
     };
 
-    const equipSwap = () => {
+    const equipSwap = (includeCompanions: boolean) => {
         if (!candidate || !result) return;
         const previous = profile.items[slot];
         if (previous) {
@@ -288,9 +262,13 @@ export default function SwapTest() {
             });
         }
         updateNestedProfile('items', { [slot]: candidate });
-        updateNestedProfile('pets', { active: result.candidateLoadout.pets });
-        updateNestedProfile('mount', { active: result.candidateLoadout.mount });
-        toast.success(`${slot} equipped and companions updated. Previous gear was saved.`);
+        if (includeCompanions) {
+            updateNestedProfile('pets', { active: result.candidateLoadout.pets });
+            updateNestedProfile('mount', { active: result.candidateLoadout.mount });
+        }
+        toast.success(includeCompanions
+            ? `${slot} equipped with the best companions for ${activeBuildGoal.name}. Previous gear was saved.`
+            : `${slot} equipped. Your current pets and mount were left unchanged.`);
         setResult(null);
         setCandidate(null);
     };
@@ -369,13 +347,16 @@ export default function SwapTest() {
 
     const recommendation = useMemo(() => {
         if (!result) return null;
-        const currentScore = focusScore(focus, result.current, enemyHealth, bossHealth, killDowntimeFor(result.current));
-        const nextScore = focusScore(focus, result.candidateOptimized, enemyHealth, bossHealth, killDowntimeFor(result.candidateOptimized));
-        const change = percentChange(currentScore, nextScore);
+        const comparison = compareBuildGoal(activeBuildGoal, result.current, result.candidateOptimized, {
+            enemyHealth,
+            bossHealth,
+            overheadSeconds: killDowntimeFor(result.candidateOptimized),
+        });
+        const change = comparison.changePercent;
         if (change > 1) return { label: 'Equip the new item', change, color: 'emerald' };
         if (change < -1) return { label: 'Keep the current item', change, color: 'red' };
         return { label: 'Sidegrade / situational', change, color: 'amber' };
-    }, [result, focus, enemyHealth, bossHealth, overheadSeconds, autoStageStats, stageSummary]);
+    }, [result, activeBuildGoal, enemyHealth, bossHealth, overheadSeconds, autoStageStats, stageSummary]);
 
     return (
         <div className="space-y-6 animate-fade-in pb-20 max-w-7xl mx-auto">
@@ -385,7 +366,7 @@ export default function SwapTest() {
                     <h1 className="text-3xl md:text-4xl font-bold text-text-primary">Swap Test</h1>
                 </div>
                 <p className="text-text-secondary text-sm max-w-3xl">
-                    Test one gear change against your real profile, then re-optimize saved pets and mounts around it before you equip.
+                    Test one gear change against your real profile and selected build objective. Equipping companions afterward is optional.
                 </p>
             </div>
 
@@ -435,22 +416,14 @@ export default function SwapTest() {
                     <p className="text-xs text-text-muted mt-1">These only affect the recommendation display; the character stat engine uses your actual profile and tech tree.</p>
                 </div>
 
-                <div className="grid sm:grid-cols-3 gap-2">
-                    {(Object.keys(FOCUS_LABELS) as Focus[]).map(value => (
-                        <button
-                            key={value}
-                            onClick={() => { setFocus(value); setResult(null); }}
-                            className={cn(
-                                'rounded-xl border px-4 py-3 text-sm font-semibold transition-colors',
-                                focus === value
-                                    ? 'bg-blue-500/15 border-blue-400/50 text-blue-300'
-                                    : 'border-border text-text-secondary hover:bg-white/5'
-                            )}
-                        >
-                            {FOCUS_LABELS[value]}
-                        </button>
-                    ))}
-                </div>
+                <BuildGoalSelector
+                    compact
+                    value={profile.misc.buildGoals}
+                    onChange={buildGoals => {
+                        updateNestedProfile('misc', { buildGoals });
+                        setResult(null);
+                    }}
+                />
 
                 <div className="rounded-xl border border-border bg-bg-primary/30 p-4 space-y-4">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -624,7 +597,7 @@ export default function SwapTest() {
                 )}>
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div>
-                            <div className="text-xs uppercase tracking-wider text-text-muted">{FOCUS_LABELS[focus]} recommendation</div>
+                            <div className="text-xs uppercase tracking-wider text-text-muted">{activeBuildGoal.name} recommendation</div>
                             <h2 className="text-2xl font-bold text-text-primary mt-1">{recommendation.label}</h2>
                             <p className="text-sm text-text-secondary mt-1">
                                 {recommendation.change >= 0 ? '+' : ''}{recommendation.change.toFixed(2)}% after companion re-optimization.
@@ -634,9 +607,13 @@ export default function SwapTest() {
                             <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs font-bold text-emerald-300">
                                 Exact · {result.combinations.toLocaleString()} combinations
                             </span>
-                            <Button onClick={equipSwap} className="gap-2">
+                            <Button variant="outline" onClick={() => equipSwap(false)} className="gap-2">
                                 <Check className="w-4 h-4" />
-                                Equip item + best companions
+                                Equip item only
+                            </Button>
+                            <Button onClick={() => equipSwap(true)} className="gap-2">
+                                <Check className="w-4 h-4" />
+                                Equip item + goal companions
                             </Button>
                         </div>
                     </div>
@@ -674,9 +651,9 @@ export default function SwapTest() {
                     </div>
 
                     <div className="grid lg:grid-cols-3 gap-3">
-                        <MetricCard title="Current, optimized" stats={result.current} focus={focus} enemyHealth={enemyHealth} bossHealth={bossHealth} overheadSeconds={killDowntimeFor(result.current)} />
-                        <MetricCard title="New item, current companions" stats={result.candidateCurrent} focus={focus} enemyHealth={enemyHealth} bossHealth={bossHealth} overheadSeconds={killDowntimeFor(result.candidateCurrent)} />
-                        <MetricCard title="New item, re-optimized" stats={result.candidateOptimized} focus={focus} enemyHealth={enemyHealth} bossHealth={bossHealth} overheadSeconds={killDowntimeFor(result.candidateOptimized)} highlight />
+                        <MetricCard title="Current, optimized" stats={result.current} baseline={result.current} goal={activeBuildGoal} context={{ enemyHealth, bossHealth, overheadSeconds: killDowntimeFor(result.current) }} />
+                        <MetricCard title="New item, current companions" stats={result.candidateCurrent} baseline={result.current} goal={activeBuildGoal} context={{ enemyHealth, bossHealth, overheadSeconds: killDowntimeFor(result.candidateCurrent) }} />
+                        <MetricCard title="New item, re-optimized" stats={result.candidateOptimized} baseline={result.current} goal={activeBuildGoal} context={{ enemyHealth, bossHealth, overheadSeconds: killDowntimeFor(result.candidateOptimized) }} highlight />
                     </div>
 
                     <StatComparison current={result.current} candidateCurrent={result.candidateCurrent} candidateOptimized={result.candidateOptimized} />
@@ -824,25 +801,20 @@ function ItemSummary({ title, item, icon, secondaryStatLibrary }: { title: strin
 }
 
 function MetricCard({
-    title, stats, focus, enemyHealth, bossHealth, overheadSeconds, highlight
+    title, stats, baseline, goal, context, highlight
 }: {
     title: string;
     stats: AggregatedStats;
-    focus: Focus;
-    enemyHealth: number;
-    bossHealth: number;
-    overheadSeconds: number;
+    baseline: AggregatedStats;
+    goal: BuildGoalDefinition;
+    context: BuildGoalContext;
     highlight?: boolean;
 }) {
-    const primary = focus === 'farm'
-        ? `${farmKillsPerMinute(stats, enemyHealth, overheadSeconds).toFixed(2)} kills/min`
-        : focus === 'boss'
-            ? `${bossSeconds(stats, bossHealth).toFixed(2)} sec`
-            : formatNumber(Math.sqrt(Math.max(0, stats.realTotalDps * stats.realTotalHps)));
+    const primary = scoreBuildGoal(goal, stats, baseline, context).toFixed(2);
     return (
         <div className={cn('rounded-xl border p-4', highlight ? 'border-blue-400/40 bg-blue-500/10' : 'border-border bg-bg-input/20')}>
             <div className="text-xs text-text-muted">{title}</div>
-            <div className="text-xl font-bold text-text-primary mt-1">{primary}</div>
+            <div className="text-xl font-bold text-text-primary mt-1">{primary} <span className="text-xs font-medium text-text-muted">goal fit</span></div>
             <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
                 <div><span className="text-text-muted">DPS</span><div className="font-mono text-orange-300">{formatNumber(stats.realTotalDps)}</div></div>
                 <div><span className="text-text-muted">HPS</span><div className="font-mono text-emerald-300">{formatNumber(stats.realTotalHps)}</div></div>

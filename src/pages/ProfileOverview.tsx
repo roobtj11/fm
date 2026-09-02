@@ -24,6 +24,8 @@ import { getPerfection } from '../utils/itemCalculations';
 import { formatCompactNumber } from '../utils/statsCalculator';
 import { ProfileIcon } from '../components/Profile/ProfileHeaderPanel';
 import { BuildAnalytics } from '../components/Profile/BuildAnalytics';
+import { BuildGoalSelector } from '../components/Profile/BuildGoalSelector';
+import { resolveBuildGoal } from '../utils/buildGoals';
 
 const SLOT_LABELS: Record<string, string> = {
     Weapon: 'Weapon', Helmet: 'Helmet', Body: 'Armour', Gloves: 'Gloves',
@@ -31,7 +33,7 @@ const SLOT_LABELS: Record<string, string> = {
 };
 
 export default function ProfileOverview() {
-    const { profile } = useProfile();
+    const { profile, updateNestedProfile } = useProfile();
     const account = useCloudSync();
     const stats = useGlobalStats(false);
     const { sets } = useSkinSets();
@@ -56,6 +58,7 @@ export default function ProfileOverview() {
     const safeStones = currentAttempt?.entries.filter(entry => entry.outcome === 'safe').length ?? 0;
     const targetStones = tracker?.targetStones ?? 10;
     const bestSet = sets[0];
+    const activeBuildGoal = resolveBuildGoal(profile.misc.buildGoals);
 
     const readinessPoints = equippedCount
         + Math.min(3, profile.pets.active.length)
@@ -109,6 +112,21 @@ export default function ProfileOverview() {
                 <StatCard label="Damage" value={stats ? formatCompactNumber(stats.totalDamage) : '—'} icon={<Swords className="h-5 w-5" />} color="text-red-300" />
                 <StatCard label="Health" value={stats ? formatCompactNumber(stats.totalHealth) : '—'} icon={<Heart className="h-5 w-5" />} color="text-emerald-300" />
                 <StatCard label="Real-time DPS" value={stats ? formatCompactNumber(stats.realTotalDps) : '—'} icon={<Sparkles className="h-5 w-5" />} color="text-cyan-300" />
+            </section>
+
+            <section className="rounded-2xl border border-violet-400/25 bg-gradient-to-br from-violet-950/25 to-bg-secondary p-5 sm:p-6">
+                <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+                    <div>
+                        <p className="text-xs font-black uppercase tracking-[0.2em] text-violet-300">Your build direction</p>
+                        <h2 className="mt-1 text-2xl font-black text-white">{activeBuildGoal.name}</h2>
+                        <p className="mt-1 max-w-3xl text-sm leading-6 text-text-muted">Choose what you are building toward here. Swap Test uses the same objective, target values, limits, and priorities automatically.</p>
+                    </div>
+                    <Link to="/calculators/swap-test" className="inline-flex items-center gap-2 rounded-xl border border-violet-400/35 bg-violet-500/10 px-4 py-2.5 text-sm font-black text-violet-200 hover:bg-violet-500/15">Test a swap <ArrowRight className="h-4 w-4" /></Link>
+                </div>
+                <BuildGoalSelector
+                    value={profile.misc.buildGoals}
+                    onChange={buildGoals => updateNestedProfile('misc', { buildGoals })}
+                />
             </section>
 
             <section className="grid gap-6 xl:grid-cols-[1.25fr_0.75fr]">

@@ -60,7 +60,12 @@ export function useProfileOptimizer() {
     // stored level — the original behavior. When false, every candidate is scored at
     // level 1 so only secondary stats decide. Either way the returned build keeps its
     // saved level for equipping.
-    const optimizeLoadout = useCallback((metric: 'dps' | 'power' | 'lifesteal' | 'balanced', base: UserProfile = profile, respectSavedLevels: boolean = true): { pets: PetSlot[]; mount: MountSlot | null } | null => {
+    const optimizeLoadout = useCallback((
+        metric: 'dps' | 'power' | 'lifesteal' | 'balanced',
+        base: UserProfile = profile,
+        respectSavedLevels: boolean = true,
+        scoreOverride?: (stats: ReturnType<StatEngine['calculate']>) => number
+    ): { pets: PetSlot[]; mount: MountSlot | null } | null => {
         // --- Pet candidate sets: every combination of up to MAX_ACTIVE_PETS from saved builds ---
         const savedPets = base.pets.savedBuilds || [];
         const petSets: PetSlot[][] = [];
@@ -132,6 +137,7 @@ export function useProfileOptimizer() {
         if (combos.length === 0) return null;
 
         const scoreOf = (stats: ReturnType<StatEngine['calculate']>): number => {
+            if (scoreOverride) return scoreOverride(stats);
             // Real-time DPS, matching the Loadout Optimizer sweep (not the theoretical average).
             if (metric === 'dps') return stats.realTotalDps;
             if (metric === 'power') return stats.power;
