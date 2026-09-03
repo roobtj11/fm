@@ -130,7 +130,7 @@ export interface ScannerTrainingExample {
 export interface UserProfile {
     id: string; // Unique identifier for the profile
     name: string;
-    iconIndex: number; // Index in CardIcons.png spritesheet (8x8 = 64 icons)
+    iconIndex: number; // Index in the versioned CardIcons.png spritesheet
     version: number;
     isShared?: boolean;
 

@@ -90,9 +90,62 @@ function formatStage(lvl: number): string {
     return `${world}-${stage}`;
 }
 
+/**
+ * The band of MissionLevelLibrary that first makes a given mission level reachable.
+ *
+ * Mission levels (1..60) and Hammer Thief levels (0..399) are two different scales, and
+ * MissionLevelLibrary is the bridge: each row allows a band of mission levels
+ * (MinLevel..MaxLevel) once you pass a minimum hammer level. A band spans several mission
+ * levels, so a level becomes available well before the row whose Index equals it: mission
+ * level 41 sits in band 37, at hammer 25-10, not band 41 at 28-9.
+ *
+ * Indexing the library by the mission level, as this page used to, therefore overstated every
+ * requirement by roughly three worlds.
+ */
+function earliestBandFor(
+    missionLevel: number,
+    levelLibrary: Record<string, MissionLevel> | null
+): MissionLevel | null {
+    if (!levelLibrary) return null;
+    const holding = Object.values(levelLibrary).filter(
+        (b) => b.MinLevel <= missionLevel && missionLevel <= b.MaxLevel
+    );
+    if (!holding.length) return null;
+    return holding.reduce((a, b) => (b.MinHammerThiefLevel < a.MinHammerThiefLevel ? b : a));
+}
+
+/** The hammer stage a mission level first becomes reachable at, or null when it always is. */
+function hammerStageForMissionLevel(
+    missionLevel: number,
+    levelLibrary: Record<string, MissionLevel> | null
+): string | null {
+    const band = earliestBandFor(missionLevel, levelLibrary);
+    if (!band || band.MinHammerThiefLevel <= 0) return null;
+    return formatStage(band.MinHammerThiefLevel);
+}
+
+/**
+ * The band you are in at a given Hammer Thief level: the highest row whose threshold you have
+ * passed. Its MinLevel..MaxLevel is the range of mission levels that can appear for you.
+ */
+const HAMMER_MAX_LEVEL = 399;
+
+function bandForHammerLevel(
+    hammerLevel: number,
+    levelLibrary: Record<string, MissionLevel> | null
+): MissionLevel | null {
+    if (!levelLibrary) return null;
+    const passed = Object.values(levelLibrary).filter((b) => b.MinHammerThiefLevel <= hammerLevel);
+    if (!passed.length) return null;
+    return passed.reduce((a, b) => (b.MinHammerThiefLevel > a.MinHammerThiefLevel ? b : a));
+}
+
 export default function MissionSolo() {
     const { selectedVersion } = useGameDataContext();
-    const [clanPoints, setClanPoints] = useState(1);
+    const [missionLevel, setMissionLevel] = useState(1);
+    // Drive the slider by Hammer Thief level instead, and let the mission levels follow.
+    const [byHammer, setByHammer] = useState(false);
+    const [hammerLevel, setHammerLevel] = useState(0);
     const [searchTerm, setSearchTerm] = useState('');
 
     const { simulateMission, playerStats, profile, libs } = useBattleSimulation();
@@ -119,7 +172,7 @@ export default function MissionSolo() {
         // Use a timeout to avoid freezing the UI
         return new Promise<void>((resolve) => {
             setTimeout(() => {
-                const result = simulateMission(battle, clanPoints, simCount);
+                const result = simulateMission(battle, effectiveLevel, simCount);
                 if (result) {
                     setMissionResults(prev => ({ ...prev, [battle.MissionId]: result }));
                 }
@@ -141,20 +194,40 @@ export default function MissionSolo() {
         setIsSimulatingAll(false);
     };
 
-    const currentClanLevelInfo = useMemo(() => {
-        if (!levelLibrary) return null;
-        return levelLibrary[clanPoints.toString()] || levelLibrary["1"];
-    }, [levelLibrary, clanPoints]);
+    const hammerBand = useMemo(
+        () => bandForHammerLevel(hammerLevel, levelLibrary),
+        [levelLibrary, hammerLevel]
+    );
+
+    // In mission mode: the band that unlocks the chosen level, not the row whose Index equals
+    // it. In hammer mode: the band the chosen hammer level puts you in.
+    const unlockBand = useMemo(
+        () => (byHammer ? hammerBand : earliestBandFor(missionLevel, levelLibrary)),
+        [byHammer, hammerBand, levelLibrary, missionLevel]
+    );
+
+    /**
+     * The mission level every reward and stat below is computed at.
+     *
+     * Both modes share `missionLevel`, so in hammer mode the in-band slider just clamps it to
+     * the band: move the hammer slider and the pick follows into the new range instead of
+     * going out of bounds.
+     */
+    const effectiveLevel = useMemo(() => {
+        if (!byHammer) return missionLevel;
+        if (!hammerBand) return 1;
+        return Math.min(Math.max(missionLevel, hammerBand.MinLevel), hammerBand.MaxLevel);
+    }, [byHammer, hammerBand, missionLevel]);
 
     const currentAllMemberReward = useMemo(() => {
         if (!allMemberRewardLibrary) return null;
-        return allMemberRewardLibrary[clanPoints.toString()];
-    }, [allMemberRewardLibrary, clanPoints]);
+        return allMemberRewardLibrary[effectiveLevel.toString()];
+    }, [allMemberRewardLibrary, effectiveLevel]);
 
     const currentRewards = useMemo(() => {
         if (!rewardLibrary) return null;
-        return rewardLibrary[clanPoints.toString()];
-    }, [rewardLibrary, clanPoints]);
+        return rewardLibrary[effectiveLevel.toString()];
+    }, [rewardLibrary, effectiveLevel]);
 
     const filteredMissions = useMemo(() => {
         if (!battleLibrary) return [];
@@ -217,14 +290,14 @@ export default function MissionSolo() {
     const getScaledValue = (base: number) => {
         if (!baseConfig) return base;
         const multiplier = baseConfig.HealthAndDamageLevelMultiplier;
-        return Math.floor(base * Math.pow(multiplier, clanPoints - 1));
+        return Math.floor(base * Math.pow(multiplier, effectiveLevel - 1));
     };
 
     if (loading) {
         return (
             <div className="flex flex-col items-center justify-center py-20 text-text-muted animate-pulse">
                 <Target className="w-12 h-12 mb-4 opacity-20" />
-                <p>Forging Mission Data...</p>
+                <p>Forging Mission Data</p>
             </div>
         );
     }
@@ -308,32 +381,106 @@ export default function MissionSolo() {
                     </div>
 
                     <div className="space-y-1 relative z-10">
-                        <div className="flex items-center gap-2 text-accent-primary">
-                            <Activity size={16} />
-                            <span className="text-[10px] font-black uppercase tracking-widest">Target Mission Level</span>
+                        <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 text-accent-primary">
+                                <Activity size={16} />
+                                <span className="text-[10px] font-black uppercase tracking-widest">
+                                    {byHammer ? 'Hammer Thief Level' : 'Target Mission Level'}
+                                </span>
+                            </div>
+                            {/* Two states, both visible: a lone button here read as a badge. */}
+                            <div
+                                role="group"
+                                aria-label="Drive the slider by"
+                                className="flex items-center gap-0.5 p-0.5 bg-bg-input rounded-lg border border-border shrink-0"
+                            >
+                                {([
+                                    { label: 'Mission', on: false },
+                                    { label: 'Hammer', on: true },
+                                ] as const).map((opt) => (
+                                    <button
+                                        key={opt.label}
+                                        type="button"
+                                        aria-pressed={byHammer === opt.on}
+                                        onClick={() => setByHammer(opt.on)}
+                                        className={cn(
+                                            'text-[9px] font-black uppercase tracking-wide px-2.5 py-1 rounded-md transition-colors',
+                                            byHammer === opt.on
+                                                ? 'bg-accent-primary text-white shadow-sm'
+                                                : 'text-text-muted hover:text-text-primary'
+                                        )}
+                                    >
+                                        {opt.label}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
-                        <h2 className="text-4xl font-black text-white">Lvl {clanPoints}</h2>
+                        {byHammer ? (
+                            <>
+                                <h2 className="text-4xl font-black text-white">{formatStage(hammerLevel)}</h2>
+                                <p className="text-xs font-black uppercase text-accent-secondary">
+                                    {hammerBand
+                                        ? `Mission Lv ${hammerBand.MinLevel} to ${hammerBand.MaxLevel}`
+                                        : 'No missions yet'}
+                                </p>
+                            </>
+                        ) : (
+                            <h2 className="text-4xl font-black text-white">Lvl {missionLevel}</h2>
+                        )}
                     </div>
 
                     <div className="space-y-4 relative z-10">
                         <input
                             type="range"
-                            min={1}
-                            max={60}
-                            value={clanPoints}
-                            onChange={(e) => setClanPoints(parseInt(e.target.value))}
+                            min={byHammer ? 0 : 1}
+                            max={byHammer ? HAMMER_MAX_LEVEL : 60}
+                            value={byHammer ? hammerLevel : missionLevel}
+                            onChange={(e) =>
+                                byHammer
+                                    ? setHammerLevel(parseInt(e.target.value))
+                                    : setMissionLevel(parseInt(e.target.value))
+                            }
                             className="w-full h-2 bg-bg-input rounded-lg appearance-none cursor-pointer accent-accent-primary"
                         />
                         <div className="flex justify-between text-[10px] font-black text-text-muted uppercase tracking-tighter">
-                            <span>Level 1</span>
-                            <span>Level 60</span>
+                            <span>{byHammer ? formatStage(0) : 'Level 1'}</span>
+                            <span>{byHammer ? formatStage(HAMMER_MAX_LEVEL) : 'Level 60'}</span>
                         </div>
+
+                        {byHammer && hammerBand && (
+                            <div className="space-y-1 pt-3 border-t border-border/50">
+                                <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-tighter">
+                                    <span className="text-text-muted">Mission Level</span>
+                                    <span className="text-accent-secondary">Lv {effectiveLevel}</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min={hammerBand.MinLevel}
+                                    max={hammerBand.MaxLevel}
+                                    value={effectiveLevel}
+                                    onChange={(e) => setMissionLevel(parseInt(e.target.value))}
+                                    className="w-full h-2 bg-bg-input rounded-lg appearance-none cursor-pointer accent-accent-secondary"
+                                />
+                                <div className="flex justify-between text-[10px] font-black text-text-muted uppercase tracking-tighter">
+                                    <span>Lv {hammerBand.MinLevel}</span>
+                                    <span>Lv {hammerBand.MaxLevel}</span>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <div className="pt-4 border-t border-border/50 space-y-3 relative z-10">
                         <div className="flex flex-col gap-1">
-                            <span className="text-[9px] font-black text-text-muted uppercase leading-none">Hammer Thief Level to find it</span>
-                            <span className="text-sm font-bold text-accent-secondary">{formatStage(currentClanLevelInfo?.MinHammerThiefLevel || 0)}</span>
+                            <span className="text-[9px] font-black text-text-muted uppercase leading-none">
+                                {byHammer ? 'Mission Levels You Can Find' : 'Hammer Thief Level to find it'}
+                            </span>
+                            <span className="text-sm font-bold text-accent-secondary">
+                                {byHammer
+                                    ? unlockBand
+                                        ? `${unlockBand.MinLevel} to ${unlockBand.MaxLevel}`
+                                        : 'None'
+                                    : formatStage(unlockBand?.MinHammerThiefLevel || 0)}
+                            </span>
                         </div>
                         <div className="flex flex-col gap-1">
                             <span className="text-[9px] font-black text-text-muted uppercase leading-none">Available Rally Wait Times</span>
@@ -415,7 +562,7 @@ export default function MissionSolo() {
                         <h2 className="text-2xl font-black text-white uppercase tracking-tight flex items-center gap-2">
                             Available Missions
                         </h2>
-                        <p className="text-xs text-text-muted uppercase font-black">Stats scaled to Level {clanPoints}</p>
+                        <p className="text-xs text-text-muted uppercase font-black">Stats scaled to Level {effectiveLevel}</p>
                     </div>
                     <div className="flex flex-col sm:flex-row items-center gap-4 w-full md:w-auto">
                         <div className="flex items-center gap-2 bg-bg-secondary/40 border border-border/50 rounded-xl px-3 py-1.5 shadow-sm">
@@ -444,13 +591,13 @@ export default function MissionSolo() {
                             ) : (
                                 <Zap className="w-4 h-4 fill-current" />
                             )}
-                            {isSimulatingAll ? 'Simulating...' : 'Simulate All'}
+                            {isSimulatingAll ? 'Simulating' : 'Simulate All'}
                         </button>
 
                         <div className="relative w-full md:w-64">
                             <Search className="absolute left-3 top-2.5 h-4 w-4 text-text-muted" />
                             <input
-                                placeholder="Filter missions..."
+                                placeholder="Filter missions"
                                 className="w-full bg-bg-input border border-border rounded-lg pl-9 pr-3 py-2 text-sm focus:ring-1 focus:ring-accent-primary outline-none transition-all"
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -463,10 +610,11 @@ export default function MissionSolo() {
                     {filteredMissions.map((battle) => {
                         const scaledDmg = getScaledValue(battle.BaseDamage);
                         const scaledHp = getScaledValue(battle.BaseHealth);
-                        const multiplier = baseConfig?.HealthAndDamageLevelMultiplier || 1.524;
-                        // The game uses a fixed baseline for suggested power regardless of the specific mission stats
-                        const fixedBasePower = 144000;
-                        const suggestedPower = fixedBasePower * Math.pow(multiplier, clanPoints - 1);
+                        // Suggested power is mission-SPECIFIC: 0.8 × UnitCount × (8·Damage + Health),
+                        // on the per-level-scaled enemy stats (scaling already applied by getScaledValue).
+                        // Calibrated to in-game values: Law L33 82.5B, Alien L33 49.5B, Black Sails L34 89.5B,
+                        // Star Blades L34 125B. (The old fixed 144000 was just Star Blades' 9×16000, hardcoded.)
+                        const suggestedPower = 0.8 * (battle.UnitCount || 1) * (8 * scaledDmg + scaledHp);
 
                         const result = missionResults[battle.MissionId];
                         const winRate = result?.winProbability || 0;
@@ -489,7 +637,12 @@ export default function MissionSolo() {
                                             <span className="text-[9px] font-black text-accent-primary bg-accent-primary/10 px-2 py-0.5 rounded-md uppercase border border-accent-primary/20">ID {battle.MissionId}</span>
                                             <div className="flex items-center gap-1 text-[9px] font-bold text-text-muted uppercase">
                                                 <Target size={10} />
-                                                Min Stage {formatStage(battle.MinLevel)}
+                                                Min Lv {battle.MinLevel}
+                                                {hammerStageForMissionLevel(battle.MinLevel, levelLibrary) && (
+                                                    <span className="text-text-muted/70 normal-case">
+                                                        (hammer {hammerStageForMissionLevel(battle.MinLevel, levelLibrary)})
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
                                         <h3 className="text-xl font-black text-white uppercase tracking-tight group-hover:text-accent-primary transition-colors leading-tight">
@@ -527,7 +680,7 @@ export default function MissionSolo() {
                                             {formatNumber(suggestedPower)}
                                         </div>
                                         <div className="text-[8px] font-bold text-text-muted mt-0.5 opacity-0 group-hover/power:opacity-100 transition-all translate-y-2 group-hover/power:translate-y-0 relative z-10 text-center px-2">
-                                            Formula: BasePower × {multiplier.toFixed(3)} ^ (Lvl-1)
+                                            Formula: 0.8 × {battle.UnitCount} units × (8×Dmg + HP)
                                         </div>
                                     </div>
 

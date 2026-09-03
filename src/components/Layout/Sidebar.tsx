@@ -6,7 +6,7 @@ import { cn } from '../../lib/utils';
 import {
     Star, Egg, Key, Shirt, Cat, Image, ChevronDown,
     Cpu, Swords, Shield, Lock, Coins, Palette, FileJson, HelpCircle, TrendingUp, Hammer, Zap, ShoppingCart, Target, Sliders,
-    Trash2, Check, Copy, Trophy, ArrowRightLeft, LayoutDashboard, Pencil, ScanLine
+    Trash2, Check, Copy, Trophy, ArrowRightLeft, LayoutDashboard, Pencil, ScanLine, Sparkles
 } from 'lucide-react';
 import { GameIcon } from '../UI/GameIcon';
 import { useProfile } from '../../context/ProfileContext';
@@ -112,6 +112,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                 { name: 'Shop', path: '/wiki/shop', icon: ShoppingCart },
                 { name: 'Progress Pass', path: '/wiki/progress-pass', icon: Zap },
                 { name: 'Secondary Stats', path: '/wiki/secondary-stats', icon: TrendingUp },
+                { name: 'Fairies', path: '/wiki/fairies', icon: Sparkles },
             ]
         },
         {

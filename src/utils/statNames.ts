@@ -22,6 +22,7 @@ export const STAT_NAMES: Record<string, string> = {
     // Combat
     'DoubleDamageChance': 'Double Chance',
     'BlockChance': 'Block Chance',
+    'ReflectChance': 'Reflect Chance',
     'AttackSpeed': 'Attack Speed',
 
     // Skills
@@ -65,7 +66,7 @@ export function getStatColor(statId: string): string {
     if (statId.includes('Critical')) {
         return 'text-yellow-400';
     }
-    if (statId === 'BlockChance') {
+    if (statId === 'BlockChance' || statId === 'ReflectChance') {
         return 'text-blue-400';
     }
     if (statId === 'AttackSpeed') {
