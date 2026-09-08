@@ -11,6 +11,15 @@ import { getStatName } from '../utils/statNames';
 import { getPerfection, getStatPerfection } from '../utils/itemCalculations';
 import { PerfectionMeter } from '../components/UI/PerfectionMeter';
 import type { MountSlot, PetSlot } from '../types/Profile';
+import {
+    automaticCompanionFit,
+    companionTestEnabled,
+    companionTestMode,
+    isAutomaticMergeMaterial,
+    withAutomaticCompanionTest,
+    withManualCompanionTest,
+    type CompanionWeaponStyle,
+} from '../utils/companionTesting';
 
 const makeId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 type CollectionSort = 'level' | 'perfection' | 'stat';
@@ -40,6 +49,10 @@ export function PetCollection() {
         onAdd={() => { setEditingIndex(null); setModalOpen(true); }}
         onEdit={index => { setEditingIndex(index); setModalOpen(true); }}
         onDelete={index => updateNestedProfile('pets', { savedBuilds: profile.pets.savedBuilds.filter((_, i) => i !== index) })}
+        onTestingChange={(index, style, enabled) => updateNestedProfile('pets', {
+            savedBuilds: profile.pets.savedBuilds.map((entry, entryIndex) => entryIndex !== index ? entry
+                : enabled === null ? withAutomaticCompanionTest(entry, style) : withManualCompanionTest(entry, style, enabled))
+        })}
         onEquip={index => {
             const selected = profile.pets.savedBuilds[index];
             const selectedKey = selected.instanceId || `${selected.rarity}-${selected.id}-${selected.level}`;
@@ -71,6 +84,7 @@ export function MountCollection() {
             evolution: current?.evolution || 0,
             skills: current?.skills || [],
             customName: current?.customName,
+            optimizerTesting: current?.optimizerTesting,
         };
         const builds = [...profile.mount.savedBuilds];
         if (editingIndex === null) builds.push(mount);
@@ -90,6 +104,10 @@ export function MountCollection() {
         onAdd={() => { setEditingIndex(null); setModalOpen(true); }}
         onEdit={index => { setEditingIndex(index); setModalOpen(true); }}
         onDelete={index => updateNestedProfile('mount', { savedBuilds: profile.mount.savedBuilds.filter((_, i) => i !== index) })}
+        onTestingChange={(index, style, enabled) => updateNestedProfile('mount', {
+            savedBuilds: profile.mount.savedBuilds.map((entry, entryIndex) => entryIndex !== index ? entry
+                : enabled === null ? withAutomaticCompanionTest(entry, style) : withManualCompanionTest(entry, style, enabled))
+        })}
         onEquip={index => updateNestedProfile('mount', { active: profile.mount.savedBuilds[index] })}
     >
         <MountSelectorModal
@@ -102,9 +120,10 @@ export function MountCollection() {
     </CollectionPage>;
 }
 
-function CollectionPage({ kind, title, description, entries, activeEntries, onAdd, onEdit, onDelete, onEquip, children }: {
+function CollectionPage({ kind, title, description, entries, activeEntries, onAdd, onEdit, onDelete, onEquip, onTestingChange, children }: {
     kind: 'pet' | 'mount'; title: string; description: string; entries: (PetSlot | MountSlot)[]; activeEntries: (PetSlot | MountSlot)[];
-    onAdd: () => void; onEdit: (index: number) => void; onDelete: (index: number) => void; onEquip: (index: number) => void; children: ReactNode;
+    onAdd: () => void; onEdit: (index: number) => void; onDelete: (index: number) => void; onEquip: (index: number) => void;
+    onTestingChange: (index: number, style: CompanionWeaponStyle, enabled: boolean | null) => void; children: ReactNode;
 }) {
     const [search, setSearch] = useState('');
     const [sortBy, setSortBy] = useState<CollectionSort>('perfection');
@@ -177,6 +196,10 @@ function CollectionPage({ kind, title, description, entries, activeEntries, onAd
             indices.forEach(index => {
                 if (activeIndexes.has(index)) return;
                 const candidate = entries[index];
+                if (candidate.optimizerTesting?.autoMelee !== undefined || candidate.optimizerTesting?.autoRanged !== undefined) {
+                    if (isAutomaticMergeMaterial(candidate)) marked.add(index);
+                    return;
+                }
                 const dominatesCandidate = (other: PetSlot | MountSlot) => {
                     if (other.level < candidate.level) return false;
                     if ((other.evolution || 0) < (candidate.evolution || 0)) return false;
@@ -235,7 +258,7 @@ function CollectionPage({ kind, title, description, entries, activeEntries, onAd
                 return <article key={`${key}-${index}`} className={`rounded-2xl border p-4 ${active ? 'border-emerald-500/60 bg-emerald-950/15' : mergeMaterial ? 'border-red-500/70 bg-red-950/15' : 'border-border bg-bg-card/70'}`}>
                     <div className="flex gap-4">
                         <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/20">{mapping && spriteIndex >= 0 ? <SpriteSheetIcon textureSrc={getAscensionTexturePath(kind === 'pet' ? 'Pets' : 'MountIcons', entry.ascensionLevel || 0, selectedVersion)} spriteWidth={mapping.sprite_size.width} spriteHeight={mapping.sprite_size.height} sheetWidth={mapping.texture_size.width} sheetHeight={mapping.texture_size.height} iconIndex={spriteIndex} className="h-16 w-16" /> : <Icon className="h-8 w-8 text-text-muted" />}</div>
-                        <div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><div><h2 className="truncate font-black text-text-primary">{entry.customName || info?.name || `${entry.rarity} ${kind}`}</h2><p className="text-xs font-bold text-amber-300">{entry.rarity} · Level {entry.level}</p></div><div className="flex flex-col items-end gap-1">{active && <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-1 text-[10px] font-black uppercase text-emerald-300"><Check className="h-3 w-3" /> Active</span>}{mergeMaterial && <span className="rounded-full bg-red-500/15 px-2 py-1 text-[10px] font-black uppercase text-red-300">Merge Material</span>}</div></div>
+                        <div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-2"><div><h2 className="truncate font-black text-text-primary">{entry.customName || info?.name || `${entry.rarity} ${kind}`}</h2><p className="text-xs font-bold text-amber-300">{entry.rarity} · Level {entry.level}</p><p className={`mt-1 text-[10px] font-bold ${mergeMaterial ? 'text-red-300' : 'text-cyan-300'}`}>{automaticCompanionFit(entry)}</p></div><div className="flex flex-col items-end gap-1">{active && <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-1 text-[10px] font-black uppercase text-emerald-300"><Check className="h-3 w-3" /> Active</span>}{mergeMaterial && <span className="rounded-full bg-red-500/15 px-2 py-1 text-[10px] font-black uppercase text-red-300">Merge Material</span>}</div></div>
                             <div className="mt-3 space-y-1">{entry.secondaryStats?.length ? entry.secondaryStats.map(stat => {
                                 const statPerfection = getStatPerfection(stat.statId, stat.value, secondaryStatLibrary);
                                 return <div key={stat.statId} className="flex justify-between gap-2 text-xs"><span className="truncate text-text-muted">{getStatName(stat.statId)}</span><span className="flex shrink-0 items-center gap-2 font-mono font-bold text-text-primary"><span>{stat.value.toFixed(2)}%</span>{statPerfection !== null && <span className="text-[10px] text-text-muted">({statPerfection.toFixed(1)}%)</span>}</span></div>;
@@ -245,6 +268,20 @@ function CollectionPage({ kind, title, description, entries, activeEntries, onAd
                     <div className="mt-4 rounded-lg border border-border/60 bg-bg-input/20 px-3 py-2">
                         <div className="mb-1 flex items-center justify-between text-[10px] font-black uppercase tracking-wider text-text-muted"><span>Perfection</span><span>{entry.secondaryStats?.length || 0} rolled stats</span></div>
                         <PerfectionMeter value={perfection} />
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                        {(['melee', 'ranged'] as CompanionWeaponStyle[]).map(style => {
+                            const enabled = companionTestEnabled(entry, style);
+                            const mode = companionTestMode(entry, style);
+                            return <div key={style} className="rounded-lg border border-border/70 bg-bg-input/20 px-2.5 py-2">
+                                <button type="button" aria-pressed={enabled} onClick={() => onTestingChange(index, style, !enabled)} className={`w-full text-left text-xs font-bold ${enabled ? 'text-emerald-300' : 'text-text-muted'}`}>
+                                    {style === 'melee' ? 'Melee' : 'Ranged'}: {enabled ? 'Test' : 'Skip'}
+                                </button>
+                                {mode === 'manual'
+                                    ? <button type="button" onClick={() => onTestingChange(index, style, null)} className="mt-1 text-[10px] font-bold text-amber-300 hover:text-amber-200">Manual · use Auto</button>
+                                    : <div className="mt-1 text-[10px] font-bold text-text-muted">Auto</div>}
+                            </div>;
+                        })}
                     </div>
                     <div className="mt-4 grid grid-cols-3 gap-2"><Action onClick={() => onEquip(index)} disabled={active} icon={<Check className="h-3.5 w-3.5" />}>{active ? 'Active' : 'Equip'}</Action><Action onClick={() => onEdit(index)} icon={<Pencil className="h-3.5 w-3.5" />}>Edit</Action><Action onClick={() => onDelete(index)} icon={<Trash2 className="h-3.5 w-3.5" />} danger>Delete</Action></div>
                 </article>;

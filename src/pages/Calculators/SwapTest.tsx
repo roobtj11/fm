@@ -12,7 +12,7 @@ import { ItemSelectorModal } from '../../components/Profile/ItemSelectorModal';
 import { PetSelectorModal } from '../../components/Profile/PetSelectorModal';
 import { MountSelectorModal } from '../../components/Profile/MountSelectorModal';
 import { Button } from '../../components/UI/Button';
-import { ItemSlot, MountSlot, PetSlot, UserProfile } from '../../types/Profile';
+import { ItemSlot, MountSlot, PetSlot, UserProfile, type BuildGoalSettings } from '../../types/Profile';
 import { AggregatedStats } from '../../utils/statEngine';
 import { AGES, MAX_ACTIVE_PETS } from '../../utils/constants';
 import { formatNumber } from '../../utils/format';
@@ -22,9 +22,19 @@ import { PerfectionMeter } from '../../components/UI/PerfectionMeter';
 import { getMainBattleStageSummary, simulateBattleMultiAsync, type BattleResult } from '../../utils/BattleSimulator';
 import { cn } from '../../lib/utils';
 import { BuildGoalSelector } from '../../components/Profile/BuildGoalSelector';
-import { compareBuildGoal, resolveBuildGoal, scoreBuildGoal, type BuildGoalContext, type BuildGoalDefinition } from '../../utils/buildGoals';
+import { BUILD_GOAL_PRESETS, compareBuildGoal, resolveBuildGoal, scoreBuildGoal, type BuildGoalContext, type BuildGoalDefinition } from '../../utils/buildGoals';
 import { recognizeLocally } from '../../utils/localOcr';
 import { scanKnownEquipmentItems } from '../../utils/screenshotItemScanner';
+import {
+    automaticCompanionFit,
+    companionTestEnabled,
+    companionTestMode,
+    isAutomaticMergeMaterial,
+    withAutomaticCompanionTest,
+    withManualCompanionTest,
+    type CompanionWeaponStyle,
+    type TestableCompanion,
+} from '../../utils/companionTesting';
 
 type EquipmentSlot = keyof UserProfile['items'];
 type CompanionLoadout = { pets: PetSlot[]; mount: MountSlot | null };
@@ -129,6 +139,18 @@ function estimatedTimeBetweenKills(stats: AggregatedStats, enemyCount: number, w
     const totalNonCombatTime = firstApproach
         + Math.max(0, waveCount - 1) * (BATTLE_TIMING.waveDelay + laterApproach);
     return totalNonCombatTime / Math.max(1, enemyCount);
+}
+
+const companionKey = (entry: TestableCompanion) => entry.instanceId
+    || `${entry.id}|${entry.rarity}|${entry.level}|${entry.evolution}|${entry.ascensionLevel || 0}|${JSON.stringify(entry.secondaryStats || [])}`;
+
+function goalsForStyle(settings: BuildGoalSettings | undefined, style: CompanionWeaponStyle) {
+    const customGoalIds = settings?.customGoals?.map(goal => goal.id) || [];
+    return [...BUILD_GOAL_PRESETS.map(goal => goal.id), ...customGoalIds].map(activeGoalId => resolveBuildGoal({
+        activeGoalId,
+        customGoals: settings?.customGoals || [],
+        weaponStyle: style,
+    }));
 }
 
 export default function SwapTest() {
@@ -265,6 +287,82 @@ export default function SwapTest() {
     );
     const equippedMountId = profile.mount.active?.instanceId;
 
+    const applyAutomaticCompanionAssessment = (
+        screenedPets: { entry: PetSlot; stats: AggregatedStats }[],
+        screenedMounts: { entry: MountSlot; stats: AggregatedStats }[],
+        baseline: AggregatedStats,
+    ) => {
+        const evaluatedAt = new Date().toISOString();
+        const evaluate = <T extends TestableCompanion>(
+            screened: { entry: T; stats: AggregatedStats }[],
+            requiredAlternatives: number,
+            activeKeys: Set<string>,
+        ) => {
+            const styles: CompanionWeaponStyle[] = ['melee', 'ranged'];
+            const vectors = new Map<CompanionWeaponStyle, number[][]>();
+            styles.forEach(style => {
+                const goals = goalsForStyle(profile.misc.buildGoals, style);
+                vectors.set(style, screened.map(item => [
+                    ...goals.map(goal => scoreBuildGoal(goal, item.stats, baseline, {
+                        enemyHealth,
+                        bossHealth,
+                        overheadSeconds: killDowntimeFor(item.stats),
+                    })),
+                    // Independent specialist dimensions prevent a high-value niche roll from
+                    // being hidden inside a weighted aggregate and incorrectly pruned.
+                    item.stats.realTotalDps,
+                    item.stats.realTotalHps,
+                    item.stats.totalHealth,
+                    style === 'melee' ? item.stats.meleeDamageMultiplier : item.stats.rangedDamageMultiplier,
+                    item.stats.skillDamageMultiplier,
+                    item.stats.criticalChance,
+                    item.stats.criticalDamage,
+                    item.stats.doubleDamageChance,
+                    item.stats.lifeSteal,
+                    item.stats.healthRegen,
+                    item.stats.blockChance,
+                    item.stats.attackSpeedMultiplier,
+                    item.stats.moveSpeed,
+                    item.stats.skillCooldownReduction,
+                ]));
+            });
+            return screened.map((item, index) => {
+                const decisions = Object.fromEntries(styles.map(style => {
+                    if (activeKeys.has(companionKey(item.entry))) return [style, true];
+                    const own = vectors.get(style)?.[index] || [];
+                    const betterAlternatives = screened.reduce((count, _other, otherIndex) => {
+                        if (otherIndex === index) return count;
+                        const other = vectors.get(style)?.[otherIndex] || [];
+                        const neverWorse = own.every((score, goalIndex) => (other[goalIndex] ?? Number.NEGATIVE_INFINITY) >= score - 1e-9);
+                        const strictlyBetter = own.some((score, goalIndex) => (other[goalIndex] ?? Number.NEGATIVE_INFINITY) > score + 1e-9);
+                        const winsEqualTie = !strictlyBetter && otherIndex < index;
+                        return neverWorse && (strictlyBetter || winsEqualTie) ? count + 1 : count;
+                    }, 0);
+                    return [style, betterAlternatives < requiredAlternatives];
+                })) as Record<CompanionWeaponStyle, boolean>;
+                return { key: companionKey(item.entry), ...decisions };
+            });
+        };
+
+        const petDecisions = new Map(evaluate(screenedPets, MAX_ACTIVE_PETS, new Set(profile.pets.active.map(companionKey))).map(item => [item.key, item]));
+        const mountDecisions = new Map(evaluate(screenedMounts, 1, new Set(profile.mount.active ? [companionKey(profile.mount.active)] : [])).map(item => [item.key, item]));
+        const updateEntry = <T extends TestableCompanion>(entry: T, decision?: { melee: boolean; ranged: boolean }): T => decision ? {
+            ...entry,
+            optimizerTesting: {
+                ...(entry.optimizerTesting || {}),
+                autoMelee: decision.melee,
+                autoRanged: decision.ranged,
+                evaluatedAt,
+            },
+        } : entry;
+        updateNestedProfile('pets', {
+            savedBuilds: savedPets.map(entry => updateEntry(entry, petDecisions.get(companionKey(entry))))
+        });
+        updateNestedProfile('mount', {
+            savedBuilds: savedMounts.map(entry => updateEntry(entry, mountDecisions.get(companionKey(entry))))
+        });
+    };
+
     const runCalculation = async () => {
         if (!candidate) {
             toast.info('Choose the gear item you want to test first.');
@@ -294,14 +392,15 @@ export default function SwapTest() {
                 const fraction = completed / Math.max(1, total);
                 setCalculationProgress({
                     percent: 8 + (phase === 'screening' ? fraction * 9 : 9 + fraction * 23),
-                    label: phase === 'screening' ? 'Screening every current companion' : 'Optimizing current companions',
+                    label: phase === 'screening' ? 'Screening enabled current companions' : 'Optimizing current companions',
                     detail: phase === 'screening'
                         ? `Checked ${completed.toLocaleString()} of ${total.toLocaleString()} pets and mounts for goal fit.`
                         : `Tested ${completed.toLocaleString()} of ${total.toLocaleString()} shortlisted combinations.`,
                 });
-            }, optimizerStrategy);
+            }, optimizerStrategy, profile.misc.buildGoals?.weaponStyle || 'melee');
             const currentLoadout: CompanionLoadout = currentBest || { pets: profile.pets.active, mount: profile.mount.active };
             const currentOptimizedProfile = withCompanions(profile, currentLoadout);
+            if (currentBest) applyAutomaticCompanionAssessment(currentBest.screenedPets, currentBest.screenedMounts, baselineStats);
 
             const candidateProfile: UserProfile = { ...profile, items: { ...profile.items, [slot]: candidate } };
             setCalculationProgress({ percent: 42, label: 'Calculating the new item', detail: `Applying the new ${slot} to your profile.` });
@@ -314,12 +413,12 @@ export default function SwapTest() {
                 const fraction = completed / Math.max(1, total);
                 setCalculationProgress({
                     percent: 45 + (phase === 'screening' ? fraction * 8 : 8 + fraction * 22),
-                    label: phase === 'screening' ? 'Screening every new-item companion' : 'Optimizing new-item companions',
+                    label: phase === 'screening' ? 'Screening enabled new-item companions' : 'Optimizing new-item companions',
                     detail: phase === 'screening'
                         ? `Checked ${completed.toLocaleString()} of ${total.toLocaleString()} pets and mounts with the new item.`
                         : `Tested ${completed.toLocaleString()} of ${total.toLocaleString()} shortlisted combinations.`,
                 });
-            }, optimizerStrategy);
+            }, optimizerStrategy, profile.misc.buildGoals?.weaponStyle || 'melee');
             const candidateLoadout: CompanionLoadout = candidateBest || { pets: candidateProfile.pets.active, mount: candidateProfile.mount.active };
 
             setCalculationProgress({ percent: 78, label: 'Building the stat comparison', detail: 'Calculating before, after, and goal-fit changes.' });
@@ -463,6 +562,20 @@ export default function SwapTest() {
 
     const removeMount = (index: number) => {
         updateNestedProfile('mount', { savedBuilds: savedMounts.filter((_, i) => i !== index) });
+    };
+
+    const setPetTestPreference = (index: number, style: CompanionWeaponStyle, enabled: boolean | null) => {
+        updateNestedProfile('pets', {
+            savedBuilds: savedPets.map((entry, entryIndex) => entryIndex !== index ? entry
+                : enabled === null ? withAutomaticCompanionTest(entry, style) : withManualCompanionTest(entry, style, enabled))
+        });
+    };
+
+    const setMountTestPreference = (index: number, style: CompanionWeaponStyle, enabled: boolean | null) => {
+        updateNestedProfile('mount', {
+            savedBuilds: savedMounts.map((entry, entryIndex) => entryIndex !== index ? entry
+                : enabled === null ? withAutomaticCompanionTest(entry, style) : withManualCompanionTest(entry, style, enabled))
+        });
     };
 
     const recommendation = useMemo(() => {
@@ -714,11 +827,11 @@ export default function SwapTest() {
                                 : 'bg-violet-500/15 border-violet-400/40 text-violet-200'
                         )}
                     >
-                        Companion search: {optimizerStrategy === 'fast' ? 'Fast shortlist' : 'Exact all combinations'}
+                        Companion search: {optimizerStrategy === 'fast' ? 'Fast shortlist' : 'Exact enabled combinations'}
                     </button>
                 </div>
                 <p className="text-[11px] leading-5 text-text-muted">
-                    Fast mode checks every saved and equipped pet and mount individually, then tests combinations of the strongest goal-fit choices and stat specialists. Exact mode tests every possible companion combination and may take much longer.
+                    Fast mode checks every newly added, enabled, and equipped companion, then tests combinations of the strongest goal-fit choices and stat specialists. Exact mode tests every enabled combination and may take much longer.
                 </p>
 
                 <div className="flex flex-wrap gap-2">
@@ -830,7 +943,7 @@ export default function SwapTest() {
                             <h2 className="text-xl font-bold text-text-primary">Unequipped companion inventory</h2>
                         </div>
                         <p className="text-xs text-text-muted mt-1 max-w-2xl">
-                            Each saved copy gets its own ID, so duplicate pets and mounts remain separate and can all be considered by the optimizer.
+                            Melee and Ranged testing are controlled separately. New companions start enabled for both; Auto may skip a style only after the companion is dominated across every goal and specialist stat. You can override either choice.
                         </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -859,8 +972,11 @@ export default function SwapTest() {
                                     subtitle={`Lv. ${pet.level} · ID ${pet.instanceId || 'legacy'}`}
                                     perfection={getPerfection(pet as any, secondaryStatLibrary)}
                                     equipped={equipped}
+                                    entry={pet}
+                                    mergeMaterial={!equipped && isAutomaticMergeMaterial(pet)}
                                     onEquip={() => equipPet(pet)}
                                     onRemove={() => removePet(index)}
+                                    onTestChange={(style, enabled) => setPetTestPreference(index, style, enabled)}
                                 />
                             );
                         })}
@@ -879,8 +995,11 @@ export default function SwapTest() {
                                     subtitle={`Lv. ${mount.level} · ID ${mount.instanceId || 'legacy'}`}
                                     perfection={getPerfection(mount as any, secondaryStatLibrary)}
                                     equipped={equipped}
+                                    entry={mount}
+                                    mergeMaterial={!equipped && isAutomaticMergeMaterial(mount)}
                                     onEquip={() => equipMount(mount)}
                                     onRemove={() => removeMount(index)}
+                                    onTestChange={(style, enabled) => setMountTestPreference(index, style, enabled)}
                                 />
                             );
                         })}
@@ -1129,23 +1248,29 @@ function InventoryColumn({ title, empty, children }: { title: string; empty: str
 }
 
 function InventoryRow({
-    title, subtitle, perfection, equipped, onEquip, onRemove
+    title, subtitle, perfection, equipped, entry, mergeMaterial, onEquip, onRemove, onTestChange
 }: {
     title: string;
     subtitle: string;
     perfection: number | null;
     equipped: boolean;
+    entry: TestableCompanion;
+    mergeMaterial: boolean;
     onEquip: () => void;
     onRemove: () => void;
+    onTestChange: (style: CompanionWeaponStyle, enabled: boolean | null) => void;
 }) {
     return (
-        <div className="rounded-xl border border-border bg-bg-input/20 p-3 flex items-start gap-3">
+        <div className={cn('rounded-xl border bg-bg-input/20 p-3', mergeMaterial ? 'border-red-500/70 bg-red-950/15' : 'border-border')}>
+            <div className="flex items-start gap-3">
             <div className="p-2 rounded-lg bg-accent-primary/10">
                 <Sparkles className="w-4 h-4 text-accent-primary" />
             </div>
             <div className="min-w-0 flex-1">
                 <div className="text-sm text-text-primary break-words">{title}</div>
                 <div className="text-[11px] text-text-muted mt-1 font-mono">{subtitle}</div>
+                <div className={cn('mt-1 text-[10px] font-bold', mergeMaterial ? 'text-red-300' : 'text-cyan-300')}>{automaticCompanionFit(entry)}</div>
+                {mergeMaterial && <div className="mt-1 text-[10px] font-black uppercase tracking-wider text-red-300">Merge material · poor for every melee and ranged goal</div>}
                 <div className="mt-2 max-w-xs"><div className="mb-1 text-[9px] font-black uppercase tracking-wider text-text-muted">Perfection</div><PerfectionMeter value={perfection} barClassName="h-1.5" /></div>
             </div>
             <div className="flex items-center gap-1 shrink-0">
@@ -1159,6 +1284,21 @@ function InventoryRow({
                 >
                     <Trash2 className="w-4 h-4" />
                 </button>
+            </div>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {(['melee', 'ranged'] as CompanionWeaponStyle[]).map(style => {
+                    const enabled = companionTestEnabled(entry, style);
+                    const mode = companionTestMode(entry, style);
+                    return <div key={style} className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-bg-primary/20 px-2.5 py-2">
+                        <button type="button" aria-pressed={enabled} onClick={() => onTestChange(style, !enabled)} className={cn('text-xs font-bold', enabled ? 'text-emerald-300' : 'text-text-muted')}>
+                            {style === 'melee' ? 'Melee' : 'Ranged'}: {enabled ? 'Test' : 'Skip'}
+                        </button>
+                        {mode === 'manual'
+                            ? <button type="button" onClick={() => onTestChange(style, null)} className="text-[10px] font-bold text-amber-300 hover:text-amber-200">Manual · use Auto</button>
+                            : <span className="text-[10px] font-bold text-text-muted">Auto</span>}
+                    </div>;
+                })}
             </div>
         </div>
     );

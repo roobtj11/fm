@@ -14,6 +14,18 @@ export interface ItemSlot {
     };
 }
 
+export interface CompanionOptimizerTesting {
+    /** Last automatic recommendation for each weapon style. Undefined means a new, untested companion. */
+    autoMelee?: boolean;
+    autoRanged?: boolean;
+    /** Manual choices override automatic pruning until the user returns that style to Auto. */
+    manualMelee?: boolean;
+    manualRanged?: boolean;
+    testMelee?: boolean;
+    testRanged?: boolean;
+    evaluatedAt?: string;
+}
+
 export interface PetSlot {
     /** Stable inventory identity so duplicate copies of the same pet stay distinct. */
     instanceId?: string;
@@ -28,6 +40,7 @@ export interface PetSlot {
     }[];
     customName?: string;
     hp?: number;
+    optimizerTesting?: CompanionOptimizerTesting;
 }
 
 export interface MountSlot {
@@ -45,6 +58,7 @@ export interface MountSlot {
     }[];
     customName?: string;
     hp?: number;
+    optimizerTesting?: CompanionOptimizerTesting;
 }
 
 export interface SkillSlot {

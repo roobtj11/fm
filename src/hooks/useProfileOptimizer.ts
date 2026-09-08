@@ -4,6 +4,7 @@ import { useGameData } from './useGameData';
 import { StatEngine, LibraryData } from '../utils/statEngine';
 import { PetSlot, SkillSlot, MountSlot, UserProfile } from '../types/Profile';
 import { MAX_ACTIVE_PETS, MAX_ACTIVE_SKILLS } from '../utils/constants';
+import { companionTestEnabled, type CompanionWeaponStyle } from '../utils/companionTesting';
 
 const yieldToBrowser = () => new Promise<void>(resolve => window.setTimeout(resolve, 0));
 
@@ -195,7 +196,7 @@ export function useProfileOptimizer() {
     }, [profile, libs]);
 
     /**
-     * Cooperative loadout search. Fast mode scores every candidate individually, keeps the
+     * Cooperative loadout search. Fast mode scores every enabled candidate individually, keeps the
      * strongest goal-fit choices plus stat specialists, then exhaustively combines that shortlist.
      */
     const optimizeLoadoutAsync = useCallback(async (
@@ -204,8 +205,17 @@ export function useProfileOptimizer() {
         respectSavedLevels: boolean = true,
         scoreOverride?: (stats: ReturnType<StatEngine['calculate']>) => number,
         onProgress?: (completed: number, total: number, phase: 'screening' | 'combinations') => void,
-        strategy: 'fast' | 'exact' = 'exact'
-    ): Promise<{ pets: PetSlot[]; mount: MountSlot | null; combinations: number; screened: number; strategy: 'fast' | 'exact' } | null> => {
+        strategy: 'fast' | 'exact' = 'exact',
+        weaponStyle: CompanionWeaponStyle = 'melee'
+    ): Promise<{
+        pets: PetSlot[];
+        mount: MountSlot | null;
+        combinations: number;
+        screened: number;
+        strategy: 'fast' | 'exact';
+        screenedPets: { entry: PetSlot; stats: ReturnType<StatEngine['calculate']> }[];
+        screenedMounts: { entry: MountSlot; stats: ReturnType<StatEngine['calculate']> }[];
+    } | null> => {
         const petKey = (pet: PetSlot) => pet.instanceId || `${pet.id}|${pet.rarity}|${pet.level}|${JSON.stringify(pet.secondaryStats)}`;
         const savedPets = base.pets.savedBuilds || [];
         const petPool: PetSlot[] = [];
@@ -242,20 +252,22 @@ export function useProfileOptimizer() {
             }, libs).calculate();
         };
 
-        let searchPets = petPool;
-        let searchMounts = mountCandidates;
-        let screenedCandidates = 0;
-        if (strategy === 'fast') {
-            type Scored<T> = { entry: T; score: number; stats: ReturnType<StatEngine['calculate']> };
-            const scoredPets: Scored<PetSlot>[] = [];
-            const scoredMounts: Scored<MountSlot | null>[] = [];
-            const screeningTotal = petPool.length + mountCandidates.length;
-            screenedCandidates = screeningTotal;
+        const activePetKeys = new Set(base.pets.active.map(petKey));
+        const activeMountKey = base.mount.active ? `${base.mount.active.id}|${base.mount.active.rarity}|${base.mount.active.level}|${JSON.stringify(base.mount.active.secondaryStats)}` : '';
+        let searchPets = petPool.filter(pet => activePetKeys.has(petKey(pet)) || companionTestEnabled(pet, weaponStyle));
+        let searchMounts = mountCandidates.filter(mount => !mount || `${mount.id}|${mount.rarity}|${mount.level}|${JSON.stringify(mount.secondaryStats)}` === activeMountKey || companionTestEnabled(mount, weaponStyle));
+        if (!searchMounts.length) searchMounts = [base.mount.active];
+        type Scored<T> = { entry: T; score: number; stats: ReturnType<StatEngine['calculate']> };
+        const scoredPets: Scored<PetSlot>[] = [];
+        const scoredMounts: Scored<MountSlot | null>[] = [];
+        const screeningTotal = searchPets.length + searchMounts.length;
+        const screenedCandidates = screeningTotal;
+        {
             let screened = 0;
             onProgress?.(0, Math.max(1, screeningTotal), 'screening');
             await yieldToBrowser();
 
-            for (const pet of petPool) {
+            for (const pet of searchPets) {
                 const key = petKey(pet);
                 const companions = [pet, ...base.pets.active.filter(active => petKey(active) !== key)].slice(0, MAX_ACTIVE_PETS);
                 const stats = statsFor(companions, base.mount.active);
@@ -266,7 +278,7 @@ export function useProfileOptimizer() {
                     await yieldToBrowser();
                 }
             }
-            for (const mount of mountCandidates) {
+            for (const mount of searchMounts) {
                 const stats = statsFor(base.pets.active, mount);
                 scoredMounts.push({ entry: mount, score: scoreStats(stats), stats });
                 screened++;
@@ -276,6 +288,9 @@ export function useProfileOptimizer() {
                 }
             }
 
+        }
+
+        if (strategy === 'fast') {
             const signals = [
                 (stats: ReturnType<StatEngine['calculate']>) => stats.realTotalDps,
                 (stats: ReturnType<StatEngine['calculate']>) => stats.realTotalHps,
@@ -328,7 +343,15 @@ export function useProfileOptimizer() {
                 }
             }
         }
-        return completed ? { pets: bestPets, mount: bestMount, combinations: total, screened: screenedCandidates, strategy } : null;
+        return completed ? {
+            pets: bestPets,
+            mount: bestMount,
+            combinations: total,
+            screened: screenedCandidates,
+            strategy,
+            screenedPets: scoredPets,
+            screenedMounts: scoredMounts.filter((item): item is Scored<MountSlot> => !!item.entry),
+        } : null;
     }, [profile, libs]);
 
     const optimizeSkills = useCallback((): SkillSlot[] | null => {
