@@ -5,10 +5,9 @@ import { GameIcon } from '../components/UI/GameIcon';
 import { useGameData } from '../hooks/useGameData';
 import { useGameDataContext } from '../context/GameDataContext';
 import { useProfile } from '../context/ProfileContext';
-import { useProfileStats } from '../hooks/useProfileStats';
-import type { FairyName } from '../types/Profile';
 import { calculateFairyBonus, effectiveFairySources, FAIRY_DEFINITIONS, FAIRY_NAMES, normalizeFairySettings, type FairySources } from '../utils/fairies';
-import { resolveBuildGoal } from '../utils/buildGoals';
+import { compareBuildGoal, readBuildGoalMetric, resolveBuildGoal } from '../utils/buildGoals';
+import { useProfileOptimizer } from '../hooks/useProfileOptimizer';
 
 interface Price { Amount: number; Currency: string }
 interface FairyUpgrade { Level: number; Costs: Price[] }
@@ -26,7 +25,8 @@ const pct = (value: number) => `${value.toFixed(value % 1 ? 2 : 0)}%`;
 
 export default function FairiesWiki() {
     const { profile, updateNestedProfile } = useProfile();
-    const stats = useProfileStats();
+    const { calculateProfileStats, isReady } = useProfileOptimizer();
+    const stats = useMemo(() => calculateProfileStats(profile), [calculateProfileStats, profile]);
     const { selectedVersion } = useGameDataContext();
     const { data: upgrades, loading, error } = useGameData<Record<string, FairyUpgrade>>('FairyUpgradesLibrary.json');
     const fairy = normalizeFairySettings(profile.misc.fairy);
@@ -51,22 +51,48 @@ export default function FairiesWiki() {
         return { currency, next, remaining, level20 };
     });
 
-    const relevance: Record<FairyName, number> = { Mira: 0, Tira: 0, Lora: 0 };
-    for (const rule of goal.rules) {
-        if (rule.ignored) continue;
-        if (['crit_chance', 'crit_chance_substat', 'crit_damage', 'real_dps', 'weapon_dps', 'boss_rate', 'farm_rate'].includes(rule.metric)) relevance.Mira += rule.weight;
-        if (['block_chance', 'block_chance_substat', 'real_hps', 'health_regen', 'lifesteal'].includes(rule.metric)) relevance.Tira += rule.weight;
-        if (['total_health', 'health_substat'].includes(rule.metric)) relevance.Lora += rule.weight;
-    }
+    const goalContext = { enemyHealth: 1, bossHealth: 1, overheadSeconds: 0 };
     const comparison = FAIRY_NAMES.map(name => {
         const definition = FAIRY_DEFINITIONS[name];
         const bonus = calculateFairyBonus(name, fairy.level, sources);
         const nextBonus = calculateFairyBonus(name, Math.min(maxLevel, fairy.level + 1), sources);
         const maxBonus = calculateFairyBonus(name, maxLevel, sources);
-        return { name, definition, bonus, nextGain: Math.max(0, nextBonus - bonus), maxBonus, score: relevance[name] * (bonus / Math.max(1, definition.cap)) };
+        const profileAt = (level: number) => ({
+            ...profile,
+            misc: { ...profile.misc, fairy: { ...fairy, active: name, level } },
+        });
+        const currentStats = calculateProfileStats(profileAt(fairy.level));
+        const nextStats = calculateProfileStats(profileAt(Math.min(maxLevel, fairy.level + 1)));
+        const impact = compareBuildGoal(goal, currentStats, nextStats, goalContext);
+        const crossedTargets = goal.rules.filter(rule => {
+            const target = rule.target ?? rule.minimum;
+            if (!target || rule.ignored) return false;
+            return readBuildGoalMetric(currentStats, rule.metric, goalContext) < target
+                && readBuildGoalMetric(nextStats, rule.metric, goalContext) >= target;
+        });
+        return {
+            name, definition, bonus, nextGain: Math.max(0, nextBonus - bonus), maxBonus,
+            score: impact.afterScore,
+            goalChange: impact.changePercent,
+            crossedTargets,
+            dpsChange: nextStats.realTotalDps - currentStats.realTotalDps,
+            hpsChange: nextStats.realTotalHps - currentStats.realTotalHps,
+        };
     });
     const bestScore = Math.max(...comparison.map(item => item.score));
     const recommended = bestScore > 0 ? comparison.find(item => item.score === bestScore)?.name : fairy.active;
+    const activeImpact = comparison.find(item => item.name === fairy.active)!;
+    const importance = fairy.level >= maxLevel ? 'Maximum level'
+        : activeImpact.nextGain <= 0.0001 ? 'No gain at current cap'
+            : activeImpact.goalChange >= 1 ? 'High priority'
+                : activeImpact.goalChange >= 0.1 ? 'Useful upgrade'
+                    : activeImpact.goalChange > 0.001 ? 'Small goal impact'
+                        : 'Not valued by this goal';
+    const goalAdvice = activeImpact.crossedTargets.length
+        ? `Review the goal after upgrading: ${activeImpact.crossedTargets.map(rule => rule.metric.replace(/_/g, ' ')).join(', ')} reaches its target.`
+        : activeImpact.goalChange > 0.001
+            ? `Keep the current goal. This upgrade moves ${goal.name} forward without completing a target.`
+            : `Keep your substat goals unchanged. ${fairy.active}'s bonus is separate from rolled substats; switch fairy or goal only if ${FAIRY_DEFINITIONS[fairy.active].targetLabel} matters to the build.`;
 
     const saveFairy = (patch: Partial<typeof fairy>) => updateNestedProfile('misc', { fairy: { ...fairy, ...patch } });
     const setManualSource = (key: keyof FairySources, value: number) => saveFairy({
@@ -77,7 +103,7 @@ export default function FairiesWiki() {
         <div className="p-4 md:p-6 space-y-5 max-w-6xl mx-auto">
             <div>
                 <h1 className="text-2xl md:text-3xl font-bold text-accent-primary flex items-center gap-2"><Sparkles className="w-7 h-7" /> Fairy Planner</h1>
-                <p className="mt-2 text-base text-text-secondary">Compare all three fairies against <strong className="text-text-primary">{goal.name}</strong>. Your selected fairy feeds every profile calculation and swap test.</p>
+                <p className="mt-2 text-base text-text-secondary">Compare all three fairies against <strong className="text-text-primary">{goal.name}</strong>. Your selected fairy is saved to the profile and feeds Swap Test, optimizers, simulations, and character totals.</p>
             </div>
 
             <Card className="border-accent-primary/25">
@@ -131,6 +157,28 @@ export default function FairiesWiki() {
                     </Card>;
                 })}
             </div>
+
+            <Card className="border-violet-400/30 bg-violet-500/5">
+                <CardContent className="pt-5 space-y-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div><h2 className="text-lg font-bold text-text-primary">Is the next fairy upgrade important?</h2><p className="mt-1 text-sm text-text-secondary">Calculated through the same complete stat engine and active goal used by Swap Test.</p></div>
+                        <span className="rounded-full border border-violet-400/40 bg-violet-400/10 px-3 py-1.5 text-sm font-bold text-violet-300">{isReady ? importance : 'Loading profile data'}</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="w-full min-w-[680px] text-sm">
+                            <thead><tr className="border-b border-border text-text-muted"><th className="pb-2 text-left font-medium">Fairy at next level</th><th className="pb-2 text-right font-medium">Bonus change</th><th className="pb-2 text-right font-medium">Goal score</th><th className="pb-2 text-right font-medium">Real DPS</th><th className="pb-2 text-right font-medium">Real HPS</th></tr></thead>
+                            <tbody>{comparison.map(item => <tr key={item.name} className={`border-b border-border/40 last:border-0 ${item.name === fairy.active ? 'bg-accent-primary/5' : ''}`}>
+                                <td className="py-2.5"><span className="flex items-center gap-2"><img src={`${textureBase}${item.definition.texture}`} alt="" className="h-9 w-9 object-contain" /><span><strong className="text-text-primary">{item.name}</strong>{item.name === recommended && <span className="ml-2 text-xs font-bold text-green-400">best fit</span>}</span></span></td>
+                                <td className="py-2.5 text-right font-semibold text-text-primary">+{pct(item.nextGain)} {item.definition.targetLabel}</td>
+                                <td className={`py-2.5 text-right font-semibold ${item.goalChange > 0.001 ? 'text-green-400' : 'text-text-muted'}`}>{item.goalChange > 0.001 ? '+' : ''}{item.goalChange.toFixed(3)}%</td>
+                                <td className={`py-2.5 text-right ${item.dpsChange > 0 ? 'text-green-400' : 'text-text-muted'}`}>{item.dpsChange > 0 ? '+' : ''}{nf.format(Math.round(item.dpsChange))}</td>
+                                <td className={`py-2.5 text-right ${item.hpsChange > 0 ? 'text-green-400' : 'text-text-muted'}`}>{item.hpsChange > 0 ? '+' : ''}{nf.format(Math.round(item.hpsChange))}</td>
+                            </tr>)}</tbody>
+                        </table>
+                    </div>
+                    <div className="rounded-lg border border-border bg-bg-primary/35 p-3"><div className="text-sm font-bold text-text-primary">Goal recommendation</div><p className="mt-1 text-sm text-text-secondary">{goalAdvice}</p></div>
+                </CardContent>
+            </Card>
 
             <Card>
                 <CardContent className="pt-5">

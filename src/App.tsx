@@ -107,6 +107,7 @@ function App() {
                                     <Route path="wiki/shop" element={<Shop />} />
                                     <Route path="wiki/progress-pass" element={<ProgressPassWiki />} />
                                     <Route path="wiki/secondary-stats" element={<SecondaryStatsWiki />} />
+                                    <Route path="fairies" element={<FairiesWiki />} />
                                     <Route path="wiki/fairies" element={<FairiesWiki />} />
                                     <Route path="wiki/missions" element={<MissionsWiki />} />
                                     <Route path="skins" element={<SkinsPage />} />

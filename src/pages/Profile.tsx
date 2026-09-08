@@ -13,6 +13,7 @@ import { StatsSummaryPanel } from '../components/Profile/StatsSummaryPanel';
 import { ProfileHeaderPanel } from '../components/Profile/ProfileHeaderPanel';
 import { SkillsPassivesPanel } from '../components/Profile/SkillsPassivesPanel';
 import { SkinSetPanel } from '../components/Profile/SkinSetPanel';
+import { FairyProfilePanel } from '../components/Profile/FairyProfilePanel';
 
 
 export default function Profile() {
@@ -88,6 +89,8 @@ export default function Profile() {
             {/* Content */}
             <div className="space-y-6">
                 <MiscPanel />
+
+                <FairyProfilePanel />
                 
                 <SkinSetPanel />
 

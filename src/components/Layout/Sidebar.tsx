@@ -66,6 +66,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                 { name: 'Edit Profile', path: '/profile', icon: Pencil, isProfile: true },
                 { name: 'My Pets', path: '/my-pets', icon: Cat },
                 { name: 'My Mounts', path: '/my-mounts', icon: Star },
+                { name: 'Fairies', path: '/fairies', icon: Sparkles },
                 { name: 'Screenshot Import', path: '/import-companions', icon: ScanLine },
                 { name: 'Account & Sync', path: '/account', icon: Shield },
                 { name: 'Progress Prediction', path: '/progress-prediction', icon: TrendingUp },
@@ -112,7 +113,6 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                 { name: 'Shop', path: '/wiki/shop', icon: ShoppingCart },
                 { name: 'Progress Pass', path: '/wiki/progress-pass', icon: Zap },
                 { name: 'Secondary Stats', path: '/wiki/secondary-stats', icon: TrendingUp },
-                { name: 'Fairies', path: '/wiki/fairies', icon: Sparkles },
             ]
         },
         {

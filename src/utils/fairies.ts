@@ -68,6 +68,8 @@ export function effectiveFairySources(settings: FairySettings | undefined, autom
 export function calculateFairyBonus(name: FairyName, level: number, sources: FairySources): number {
     const fairy = FAIRY_DEFINITIONS[name];
     const source = Math.max(0, sources[fairy.source] || 0);
-    const steps = Math.floor((source + 1e-9) / fairy.sourceStep);
+    // The game class applies the source/divider ratio directly. The UI rounds the result for
+    // display, which is why 17.9% Skill Damage appears as +1% for Mira in the screenshot.
+    const steps = source / fairy.sourceStep;
     return Math.min(fairy.cap, steps * fairy.bonusPerStepAtLevelOne * Math.min(20, Math.max(1, level)));
 }
