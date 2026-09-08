@@ -194,8 +194,12 @@ export function scoreBuildGoal(goal: BuildGoalDefinition, stats: AggregatedStats
         const value = Math.max(0, readBuildGoalMetric(stats, rule.metric, context));
         const base = Math.max(0.000001, Math.abs(readBuildGoalMetric(baseline, rule.metric, context)));
         const threshold = rule.target ?? rule.minimum;
+        // Targets are distance-first: reaching the requested value is worth 100%, and going
+        // farther does not drown out another unfinished target. This intentionally allows a
+        // swap with a lower headline stat total when it moves the chosen build closer to its
+        // actual substat goals.
         let utility = threshold && threshold > 0
-            ? Math.min(value / threshold, 1) + Math.log1p(Math.max(0, value - threshold) / threshold) * 0.15
+            ? Math.min(value / threshold, 1)
             : Math.log1p(value / base);
         if (rule.maximum !== undefined && value > rule.maximum) utility -= (value - rule.maximum) / Math.max(0.000001, rule.maximum) * 2;
         if (rule.required && threshold !== undefined && value < threshold) utility -= 5 + (threshold - value) / Math.max(0.000001, threshold) * 5;

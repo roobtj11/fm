@@ -122,6 +122,20 @@ export interface BuildGoalSettings {
     customGoals: CustomBuildGoal[];
 }
 
+export type FairyName = 'Mira' | 'Tira' | 'Lora';
+
+export interface FairySettings {
+    active: FairyName;
+    level: number;
+    useManualSources?: boolean;
+    manualSources?: {
+        skillDamage?: number;
+        skillCooldown?: number;
+        health?: number;
+    };
+    expiresAt?: string;
+}
+
 export type ScannerTrainingField = 'kind' | 'name' | 'rarity' | 'level' | 'slot' | 'age' | 'stat_name' | 'stat_value';
 
 export interface ScannerTrainingExample {
@@ -247,6 +261,7 @@ export interface UserProfile {
             difficulty: number;
         };
         buildGoals?: BuildGoalSettings;
+        fairy?: FairySettings;
         scannerTrainingExamples?: ScannerTrainingExample[];
         scannerContributionEnabled?: boolean;
         steppingStoneContributionEnabled?: boolean;
@@ -335,6 +350,7 @@ export const INITIAL_PROFILE: UserProfile = {
         useSkinWindup: true,
         swapCalculatorStage: { age: 0, battle: 0, difficulty: 0 },
         buildGoals: { activeGoalId: 'balanced_late_game', customGoals: [] },
+        fairy: { active: 'Mira', level: 1, useManualSources: false, manualSources: {} },
         scannerTrainingExamples: [],
         scannerContributionEnabled: true,
         steppingStoneContributionEnabled: true,

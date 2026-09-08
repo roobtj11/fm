@@ -75,6 +75,9 @@ const ModalContent = memo(({ current, proposed, onClose }: Omit<LoadoutCompariso
                     <ComparisonStatRow variant="minimal" icon={<Shield className="w-4 h-4" />} label="Block chance"
                         originalValue={cur.blockChance || 0} testValue={pro.blockChance || 0}
                         formatFn={formatPercent} color="text-blue-400" />
+                    <ComparisonStatRow variant="minimal" icon={<Shield className="w-4 h-4" />} label="Reflect chance"
+                        originalValue={cur.reflectChance || 0} testValue={pro.reflectChance || 0}
+                        formatFn={formatPercent} color="text-cyan-400" />
                     <ComparisonStatRow variant="minimal" icon={<Swords className="w-4 h-4" />} label="Damage"
                         originalValue={cur.secondaryDamageMulti || 0} testValue={pro.secondaryDamageMulti || 0}
                         formatFn={formatPercent} color="text-red-400" />

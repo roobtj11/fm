@@ -6,6 +6,7 @@
 import { UserProfile } from '../types/Profile';
 import { SKILL_MECHANICS, attackIntervalSeconds, doubleDelaySeconds } from './constants';
 import { getNormalizedTarget } from './ascensionUtils';
+import { calculateFairyBonus, effectiveFairySources, normalizeFairySettings } from './fairies';
 import {
     StatAttribution, StatContribution, SourceRef, canonicalStatKey,
     TOTAL_DAMAGE_KEY, TOTAL_HEALTH_KEY, TOTAL_POWER_KEY
@@ -99,6 +100,8 @@ export interface AggregatedStats {
 
     criticalDamage: number;
     blockChance: number;
+    reflectChance: number;
+    fairyBonus: number;
     doubleDamageChance: number;
 
     healthRegen: number;
@@ -231,6 +234,8 @@ export const DEFAULT_STATS: AggregatedStats = {
     criticalChance: 0,
     criticalDamage: 1.2,
     blockChance: 0,
+    reflectChance: 0,
+    fairyBonus: 0,
     doubleDamageChance: 0,
     healthRegen: 0,
     lifeSteal: 0,
@@ -1655,6 +1660,25 @@ export class StatEngine {
         this.stats.skillHealthMultiplier = (1 + this.stats.skillHealthMultiplier)
             * (1 + this.secondaryStats.skillHealthMulti + this.secondaryStats.skillDamageMulti) - 1;
         this.stats.moveSpeed = this.combine(this.stats.moveSpeed, this.secondaryStats.moveSpeed, 'Additive');
+
+        // Seasonal fairy conversion. The source values are equipped substat percentages; users
+        // can override them on the Fairies page when a newly released source is not yet parsed.
+        const fairy = normalizeFairySettings(this.profile.misc.fairy);
+        const fairySources = effectiveFairySources(fairy, {
+            skillDamage: this.secondaryStats.skillDamageMulti * 100,
+            skillCooldown: this.secondaryStats.skillCooldownMulti * 100,
+            health: this.secondaryStats.healthMulti * 100,
+        });
+        const fairyBonusPercent = calculateFairyBonus(fairy.active, fairy.level, fairySources);
+        this.stats.fairyBonus = fairyBonusPercent / 100;
+        if (fairy.active === 'Mira') {
+            this.stats.criticalChance += this.stats.fairyBonus;
+            this.stats.critChanceBreakdown.other += this.stats.fairyBonus;
+        } else if (fairy.active === 'Tira') {
+            this.stats.blockChance += this.stats.fairyBonus;
+        } else {
+            this.stats.reflectChance += this.stats.fairyBonus;
+        }
 
         // Populate detailed breakdowns for secondary stats
         this.stats.skillDamageBreakdown.substats = this.secondaryStats.skillDamageMulti;

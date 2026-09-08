@@ -944,6 +944,7 @@ function StatComparison({
         { group: 'Combat rates', label: 'Lifesteal', read: s => s.lifeSteal, kind: 'percent' },
         { group: 'Combat rates', label: 'Health regen', read: s => s.healthRegen, kind: 'percent' },
         { group: 'Combat rates', label: 'Block chance', read: s => s.blockChance, kind: 'percent' },
+        { group: 'Combat rates', label: 'Reflect chance', read: s => s.reflectChance, kind: 'percent' },
         { group: 'Combat rates', label: 'Skill cooldown reduction', read: s => s.skillCooldownReduction, kind: 'percent' },
         { group: 'Timing', label: 'Real attacks per second', read: s => s.realAps },
         { group: 'Timing', label: 'Attack cycle', read: s => s.realCycleTime, kind: 'seconds' },
