@@ -137,7 +137,9 @@ export interface FairySettings {
     expiresAt?: string;
 }
 
-export type ScannerTrainingField = 'kind' | 'name' | 'rarity' | 'level' | 'slot' | 'age' | 'stat_name' | 'stat_value';
+export type ScannerTrainingField = 'kind' | 'name' | 'rarity' | 'level' | 'slot' | 'age'
+    | 'stat_name' | 'stat_value'
+    | 'stat_1_name' | 'stat_1_value' | 'stat_2_name' | 'stat_2_value';
 
 export interface ScannerTrainingExample {
     id: string;

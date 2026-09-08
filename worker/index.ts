@@ -104,7 +104,8 @@ const scannerTraining = async (request: Request, env: Env) => {
         const body = await request.json().catch(() => null) as { examples?: unknown } | null;
         if (!body || !Array.isArray(body.examples) || body.examples.length > 100) return json({ error: 'A valid correction collection is required.' }, 400);
         const allowedKinds = ['item', 'pet', 'mount'];
-        const allowedFields = ['kind', 'name', 'rarity', 'level', 'slot', 'age', 'stat_name', 'stat_value'];
+        const allowedFields = ['kind', 'name', 'rarity', 'level', 'slot', 'age', 'stat_name', 'stat_value',
+            'stat_1_name', 'stat_1_value', 'stat_2_name', 'stat_2_value'];
         const statements = body.examples.flatMap((raw: unknown) => {
             const example = raw as Record<string, unknown>;
             if (typeof example.id !== 'string' || !allowedKinds.includes(String(example.kind)) || !allowedFields.includes(String(example.field)) || typeof example.correctedValue !== 'string') return [];

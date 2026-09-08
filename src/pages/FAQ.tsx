@@ -15,7 +15,7 @@ const helpItems = [
     {
         icon: ScanLine,
         title: 'What happens when screenshot scanning fails?',
-        text: 'Automatic local OCR runs first. Only after it fails will the correction tool appear so you can select a region and enter the correct value manually.',
+        text: 'Automatic local OCR runs first. If it fails or only reads part of the screenshot, open the correction tool to select each missing field—including numbered substat names and values—and enter it manually.',
     },
     {
         icon: ShieldCheck,

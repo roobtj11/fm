@@ -33,6 +33,7 @@ const makeId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto
 const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
 const inputClass = 'w-full rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary outline-none focus:border-accent-primary';
 const normalizedStats = (stats: ImportStat[] = []) => [...stats]
+    .filter(stat => Boolean(stat.statId))
     .map(stat => ({ statId: stat.statId, value: Number(stat.value) || 0 }))
     .sort((a, b) => a.statId.localeCompare(b.statId));
 
@@ -64,6 +65,45 @@ const statIdFromText = (value: string) => {
     const clean = value.toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ');
     return statAliases.find(([label]) => clean.includes(label))?.[1];
 };
+
+const indexedStatField = (field: ScannerTrainingField) => field.match(/^stat_(\d+)_(name|value)$/);
+
+function applyCorrectionValue(current: Recognition, field: ScannerTrainingField, rawValue: string): Recognition {
+    const value = rawValue.trim();
+    if (!value) return current;
+    if (field === 'kind' && ['item', 'pet', 'mount'].includes(value.toLowerCase())) return { ...current, kind: value.toLowerCase() as Kind };
+    if (field === 'name') return { ...current, name: value };
+    if (field === 'rarity') return { ...current, rarity: value };
+    if (field === 'level') return { ...current, level: Math.max(1, Number(value.replace(/[^0-9]/g, '')) || 1) };
+    if (field === 'slot') return { ...current, slot: slotFromType(value) || value as EquipmentSlot };
+    if (field === 'age') {
+        const age = AGES.findIndex(item => normalize(item) === normalize(value));
+        return { ...current, age: age >= 0 ? age : Math.max(0, Number(value) - 1) };
+    }
+    const indexed = indexedStatField(field);
+    if (indexed) {
+        const index = Math.max(0, Number(indexed[1]) - 1);
+        const stats = [...current.secondaryStats];
+        while (stats.length <= index) stats.push({ statId: '', value: 0 });
+        if (indexed[2] === 'name') {
+            const statId = statIdFromText(value);
+            if (statId) stats[index] = { ...stats[index], statId };
+        } else {
+            stats[index] = { ...stats[index], value: Number(value.replace(/[^0-9.,+-]/g, '').replace(',', '.')) || 0 };
+        }
+        return { ...current, secondaryStats: stats };
+    }
+    if (field === 'stat_name') {
+        const statId = statIdFromText(value);
+        return statId ? { ...current, secondaryStats: [...current.secondaryStats, { statId, value: 0 }] } : current;
+    }
+    if (field === 'stat_value' && current.secondaryStats.length) {
+        const stats = [...current.secondaryStats];
+        stats[stats.length - 1] = { ...stats[stats.length - 1], value: Number(value.replace('%', '')) || 0 };
+        return { ...current, secondaryStats: stats };
+    }
+    return current;
+}
 
 function parseOcr(text: string, confidence: number, spriteMapping: any, autoItemMapping: any): Recognition {
     const candidates = [
@@ -109,13 +149,17 @@ function parseOcr(text: string, confidence: number, spriteMapping: any, autoItem
     };
 }
 
-const recognitionFailed = (result: Recognition) => !result.name || result.confidence === undefined || result.confidence < 0.35 || (result.kind === 'item' && (result.slot === undefined || result.age === undefined || result.idx === undefined));
+const recognitionFailed = (result: Recognition, expectedStats = 0) => !result.name || result.confidence === undefined || result.confidence < 0.35
+    || result.secondaryStats.filter(stat => stat.statId && Number.isFinite(stat.value)).length < expectedStats
+    || (result.kind === 'item' && (result.slot === undefined || result.age === undefined || result.idx === undefined));
 
 export default function CompanionImport() {
     const { profile, updateNestedProfile } = useProfile();
     const { data: spriteMapping } = useGameData<any>('ManualSpriteMapping.json');
     const { data: autoItemMapping } = useGameData<any>('AutoItemMapping.json');
     const { data: secondaryStatLibrary } = useGameData<any>('SecondaryStatLibrary.json');
+    const { data: itemSecondaryUnlock } = useGameData<any>('SecondaryStatItemUnlockLibrary.json');
+    const { data: companionSecondaryUnlock } = useGameData<any>('SecondaryStatPetUnlockLibrary.json');
     const fileRef = useRef<HTMLInputElement>(null);
     const [preview, setPreview] = useState('');
     const [imageDataUrl, setImageDataUrl] = useState('');
@@ -131,6 +175,17 @@ export default function CompanionImport() {
     const [queueIndex, setQueueIndex] = useState(0);
     const [autoAnalyzeNext, setAutoAnalyzeNext] = useState(false);
     const [importedCount, setImportedCount] = useState(0);
+
+    const expectedStatCount = (candidate: Recognition) => {
+        if (candidate.kind === 'item') {
+            if ((profile.misc.forgeAscensionLevel || 0) > 0) return 2;
+            return Math.max(0, Number(itemSecondaryUnlock?.[String(candidate.age ?? '')]?.NumberOfSecondStats) || 0);
+        }
+        const ascension = candidate.kind === 'pet' ? profile.misc.petAscensionLevel : profile.misc.mountAscensionLevel;
+        if ((ascension || 0) > 0) return 2;
+        return Math.max(0, Number(companionSecondaryUnlock?.[candidate.rarity]?.NumberOfSecondStats) || 0);
+    };
+    const applicableStatCount = result ? Math.max(expectedStatCount(result), result.secondaryStats.length) : 0;
 
     const statIds = useMemo(() => Object.keys(secondaryStatLibrary || {}), [secondaryStatLibrary]);
     const availableNames = useMemo(() => {
@@ -215,7 +270,7 @@ export default function CompanionImport() {
                 setProgressLabel(message.status.replace(/_/g, ' '));
             });
             let parsed = parseOcr(ocr.text, ocr.confidence, spriteMapping, autoItemMapping);
-            if (recognitionFailed(parsed)) {
+            if (recognitionFailed(parsed, expectedStatCount(parsed))) {
                 const sharedResponse = await fetch('/api/scanner-training').catch(() => null);
                 const sharedPayload = sharedResponse?.ok
                     ? await sharedResponse.json().catch(() => null) as { examples?: Array<Omit<ScannerTrainingExample, 'id' | 'createdAt' | 'region'> & { regionJson?: string }> } | null
@@ -234,10 +289,14 @@ export default function CompanionImport() {
                     const readings = await recognizeRegionsLocally(imageDataUrl, templates.map(template => template.region), message => setProgress(Math.round((message.progress || 0) * 100)));
                     const trainedText = templates.map((template, index) => `${template.field}: ${readings[index]?.text || ''}`).join('\n');
                     parsed = parseOcr(`${ocr.text}\n${trainedText}`, Math.max(ocr.confidence, ...readings.map(reading => reading.confidence)), spriteMapping, autoItemMapping);
+                    templates.forEach((template, index) => {
+                        const reading = readings[index]?.text;
+                        if (reading) parsed = applyCorrectionValue(parsed, template.field, reading);
+                    });
                 }
             }
             setResult(parsed);
-            const failed = recognitionFailed(parsed);
+            const failed = recognitionFailed(parsed, expectedStatCount(parsed));
             setScanFailed(failed);
             if (failed) setError('Automatic reading needs help. Mark only the failed fields below, enter the correct values, and ForgeMaster will remember those regions for future screenshots.');
         } catch (cause) {
@@ -279,30 +338,17 @@ export default function CompanionImport() {
     };
 
     const update = (patch: Partial<Recognition>) => setResult(current => current ? { ...current, ...patch } : current);
-    const updateStat = (index: number, patch: Partial<ImportStat>) => update({ secondaryStats: result!.secondaryStats.map((stat, i) => i === index ? { ...stat, ...patch } : stat) });
+    const updateStat = (index: number, patch: Partial<ImportStat>) => setResult(current => {
+        if (!current) return current;
+        const stats = [...current.secondaryStats];
+        while (stats.length <= index) stats.push({ statId: statIds[0] || 'DamageMulti', value: 0 });
+        stats[index] = { ...stats[index], ...patch };
+        return { ...current, secondaryStats: stats };
+    });
 
     const addCorrection = (correction: DraftCorrection) => {
         setCorrections(current => [...current, correction]);
-        const value = correction.correctedValue.trim();
-        if (!value) return;
-        if (correction.field === 'kind' && ['item', 'pet', 'mount'].includes(value.toLowerCase())) update({ kind: value.toLowerCase() as Kind });
-        if (correction.field === 'name') update({ name: value });
-        if (correction.field === 'rarity') update({ rarity: value });
-        if (correction.field === 'level') update({ level: Math.max(1, Number(value) || 1) });
-        if (correction.field === 'slot') update({ slot: slotFromType(value) || value as EquipmentSlot });
-        if (correction.field === 'age') {
-            const age = AGES.findIndex(item => normalize(item) === normalize(value));
-            update({ age: age >= 0 ? age : Math.max(0, Number(value) - 1) });
-        }
-        if (correction.field === 'stat_name') {
-            const statId = statIdFromText(value);
-            if (statId) update({ secondaryStats: [...(result?.secondaryStats || []), { statId, value: 0 }] });
-        }
-        if (correction.field === 'stat_value') {
-            const stats = [...(result?.secondaryStats || [])];
-            if (stats.length) stats[stats.length - 1] = { ...stats[stats.length - 1], value: Number(value.replace('%', '')) || 0 };
-            update({ secondaryStats: stats });
-        }
+        setResult(current => current ? applyCorrectionValue(current, correction.field, correction.correctedValue) : current);
     };
 
     const save = async () => {
@@ -413,8 +459,13 @@ export default function CompanionImport() {
                     </div>
                     {!selectedMatch && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">That name is not in the current game config. Correct the name before importing.</div>}
                     {(result.damage !== undefined || result.health !== undefined) && <div className="grid grid-cols-2 gap-3 text-xs"><div className="rounded-lg bg-black/20 p-3"><span className="text-text-muted">Shown damage</span><strong className="block text-base text-text-primary">{result.damage ?? '—'}</strong></div><div className="rounded-lg bg-black/20 p-3"><span className="text-text-muted">Shown health</span><strong className="block text-base text-text-primary">{result.health ?? '—'}</strong></div></div>}
-                    <div className="space-y-2"><div className="flex items-center justify-between"><h3 className="text-xs font-black uppercase text-text-secondary">Secondary stats</h3><button onClick={() => update({ secondaryStats: [...result.secondaryStats, { statId: statIds[0] || 'DamageMulti', value: 0 }] })} className="flex items-center gap-1 text-xs font-bold text-accent-primary"><Plus className="h-3 w-3" />Add stat</button></div>{result.secondaryStats.map((stat, index) => <div key={`${index}-${stat.statId}`} className="grid grid-cols-[1fr_7rem_2rem] gap-2"><select value={stat.statId} onChange={e => updateStat(index, { statId: e.target.value })} className={inputClass}>{statIds.map(id => <option key={id} value={id}>{getStatName(id)}</option>)}</select><input type="number" step="0.01" value={stat.value} onChange={e => updateStat(index, { value: Number(e.target.value) })} className={inputClass} /><button onClick={() => update({ secondaryStats: result.secondaryStats.filter((_, i) => i !== index) })} className="rounded-lg text-red-300 hover:bg-red-500/10"><Trash2 className="mx-auto h-4 w-4" /></button></div>)}</div>
+                    <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-3"><h3 className="text-xs font-black uppercase text-text-secondary">Secondary stats · {result.secondaryStats.length}/{applicableStatCount}</h3>{result.secondaryStats.length < applicableStatCount && <button onClick={() => update({ secondaryStats: [...result.secondaryStats, { statId: statIds[0] || 'DamageMulti', value: 0 }] })} className="flex items-center gap-1 text-xs font-bold text-accent-primary"><Plus className="h-3 w-3" />Add substat {result.secondaryStats.length + 1}</button>}</div>
+                        {result.secondaryStats.map((stat, index) => <div key={`${index}-${stat.statId}`} className="rounded-lg border border-border/60 bg-black/10 p-2"><div className="mb-1 text-[10px] font-black uppercase text-text-muted">Substat {index + 1}</div><div className="grid grid-cols-[minmax(0,1fr)_6rem_2rem] gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_2rem]"><select aria-label={`Substat ${index + 1} name`} value={stat.statId} onChange={e => updateStat(index, { statId: e.target.value })} className={inputClass}>{statIds.map(id => <option key={id} value={id}>{getStatName(id)}</option>)}</select><input aria-label={`Substat ${index + 1} value`} type="number" step="0.01" value={stat.value} onChange={e => updateStat(index, { value: Number(e.target.value) })} className={inputClass} /><button aria-label={`Remove substat ${index + 1}`} onClick={() => update({ secondaryStats: result.secondaryStats.filter((_, i) => i !== index) })} className="rounded-lg text-red-300 hover:bg-red-500/10"><Trash2 className="mx-auto h-4 w-4" /></button></div></div>)}
+                        {applicableStatCount > 0 && result.secondaryStats.length < applicableStatCount && <p className="rounded-lg border border-amber-400/25 bg-amber-400/5 p-2 text-xs text-amber-200">This {result.kind} can have {applicableStatCount} substat{applicableStatCount === 1 ? '' : 's'}. Add or teach the missing field before importing if it appears in the screenshot.</p>}
+                    </div>
                     {result.notes && <p className="rounded-lg bg-black/20 p-3 text-xs leading-5 text-text-muted">{result.notes}</p>}
+                    {preview && <button type="button" onClick={() => { setScanFailed(true); window.setTimeout(() => document.getElementById('scan-corrections')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0); }} className="flex w-full items-center justify-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/5 px-4 py-2.5 text-sm font-bold text-amber-200 hover:bg-amber-400/10"><Crop className="h-4 w-4" />{scanFailed ? 'Correction fields are open below' : 'Partial scan? Fix or teach a field'}</button>}
                     <button onClick={save} disabled={!selectedMatch || duplicate || busy} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-3 font-black text-black disabled:opacity-35">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : duplicate ? <CopyCheck className="h-4 w-4" /> : <Check className="h-4 w-4" />}{duplicate ? 'Duplicate — not imported' : result.kind === 'item' ? 'Add to saved equipment' : `Add to My ${result.kind === 'pet' ? 'Pets' : 'Mounts'}`}</button>
                 </div>}
             </section>
@@ -423,6 +474,8 @@ export default function CompanionImport() {
             <RegionCorrectionPanel
                 image={preview}
                 corrections={corrections}
+                maxStats={Math.max(1, applicableStatCount)}
+                statIds={statIds}
                 onAdd={addCorrection}
                 onRemove={index => setCorrections(current => current.filter((_, correctionIndex) => correctionIndex !== index))}
             />
@@ -434,9 +487,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     return <label className="text-[10px] font-black uppercase text-text-muted">{label}<div className="mt-1">{children}</div></label>;
 }
 
-function RegionCorrectionPanel({ image, corrections, onAdd, onRemove }: {
+function RegionCorrectionPanel({ image, corrections, maxStats, statIds, onAdd, onRemove }: {
     image: string;
     corrections: DraftCorrection[];
+    maxStats: number;
+    statIds: string[];
     onAdd: (correction: DraftCorrection) => void;
     onRemove: (index: number) => void;
 }) {
@@ -462,10 +517,10 @@ function RegionCorrectionPanel({ image, corrections, onAdd, onRemove }: {
     });
 
     return (
-        <section className="rounded-2xl border border-amber-400/30 bg-amber-950/10 p-5 space-y-5">
+        <section id="scan-corrections" className="scroll-mt-4 rounded-2xl border border-amber-400/30 bg-amber-950/10 p-4 space-y-5 sm:p-5">
             <div className="flex items-start gap-3">
                 <div className="rounded-xl bg-amber-400/10 p-2 text-amber-300"><ScanLine className="h-5 w-5" /></div>
-                <div><h2 className="text-xl font-black text-text-primary">Help only where automatic scan failed</h2><p className="mt-1 max-w-3xl text-xs leading-5 text-text-muted">Choose the missing field, drag a box around that value in the screenshot, and type the correct value. The current import updates immediately, and the normalized region is saved with your account for screenshots with the same layout.</p></div>
+                <div><h2 className="text-xl font-black text-text-primary">Fix missing or incorrect fields</h2><p className="mt-1 max-w-3xl text-xs leading-5 text-text-muted">Choose a field—including each numbered substat name and value—drag a box around it, and enter the correct value. The current import updates immediately, and the normalized region is saved with your account for screenshots with the same layout.</p></div>
             </div>
             <div className="grid gap-5 lg:grid-cols-[1fr_20rem]">
                 <div className="overflow-auto rounded-xl border border-border bg-black/30 p-2">
@@ -484,10 +539,11 @@ function RegionCorrectionPanel({ image, corrections, onAdd, onRemove }: {
                 <div className="space-y-4">
                     <div className="rounded-xl border border-border bg-bg-card/60 p-4 space-y-3">
                         <div className="flex items-center gap-2 text-sm font-black text-text-primary"><Crop className="h-4 w-4 text-amber-300" /> New correction</div>
-                        <Field label="What is inside the box?"><select value={field} onChange={event => setField(event.target.value as ScannerTrainingField)} className={inputClass}>{[
-                            ['kind','Type: item, pet, or mount'], ['name','Name'], ['rarity','Rarity'], ['level','Level'], ['slot','Equipment slot'], ['age','Age'], ['stat_name','Secondary stat name'], ['stat_value','Secondary stat value'],
+                        <Field label="What is inside the box?"><select value={field} onChange={event => { setField(event.target.value as ScannerTrainingField); setCorrectedValue(''); }} className={inputClass}>{[
+                            ['kind','Type: item, pet, or mount'], ['name','Name'], ['rarity','Rarity'], ['level','Level'], ['slot','Equipment slot'], ['age','Age'],
+                            ...Array.from({ length: maxStats }, (_, index) => [[`stat_${index + 1}_name`, `Substat ${index + 1} name`], [`stat_${index + 1}_value`, `Substat ${index + 1} value`]]).flat(),
                         ].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
-                        <Field label="Correct value"><input value={correctedValue} onChange={event => setCorrectedValue(event.target.value)} placeholder="Type exactly what should be saved" className={inputClass} /></Field>
+                        <Field label="Correct value"><input list={field.endsWith('_name') ? 'scan-correction-stat-names' : undefined} inputMode={field.endsWith('_value') || field === 'level' || field === 'age' ? 'decimal' : 'text'} value={correctedValue} onChange={event => setCorrectedValue(event.target.value)} placeholder={field.endsWith('_name') ? 'Choose a stat name' : 'Type exactly what should be saved'} className={inputClass} /><datalist id="scan-correction-stat-names">{statIds.map(id => <option key={id} value={getStatName(id)} />)}</datalist></Field>
                         <button type="button" disabled={!region || region.width < 0.01 || region.height < 0.01 || !correctedValue.trim()} onClick={() => {
                             if (!region) return;
                             onAdd({ field, region, correctedValue: correctedValue.trim() });
@@ -497,7 +553,7 @@ function RegionCorrectionPanel({ image, corrections, onAdd, onRemove }: {
                     </div>
                     <div className="space-y-2">
                         {corrections.map((correction, index) => <div key={index} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-bg-primary/30 p-2 text-xs"><div className="min-w-0"><div className="font-bold text-text-primary">{correction.field.replace('_', ' ')}</div><div className="truncate text-text-muted">{correction.correctedValue}</div></div><button type="button" onClick={() => onRemove(index)} className="rounded-md p-2 text-red-300 hover:bg-red-500/10"><Trash2 className="h-3.5 w-3.5" /></button></div>)}
-                        {!corrections.length && <p className="rounded-lg border border-dashed border-border p-3 text-[11px] leading-5 text-text-muted">Drag on the image first. This section stays hidden whenever automatic recognition succeeds.</p>}
+                        {!corrections.length && <p className="rounded-lg border border-dashed border-border p-3 text-[11px] leading-5 text-text-muted">Drag on the image first. You can open this section after any scan, including a partially successful scan.</p>}
                     </div>
                 </div>
             </div>
