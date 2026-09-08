@@ -731,6 +731,32 @@ export function simulateBattleMulti(
     */
 }
 
+/** Runs an explicit prediction batch cooperatively so the UI can repaint between simulations. */
+export async function simulateBattleMultiAsync(
+    playerStats: AggregatedStats,
+    profile: UserProfile | null,
+    ageIdx: number,
+    battleIdx: number,
+    difficultyMode: number,
+    libs: LibraryData,
+    runs: number,
+    onProgress?: (completed: number, total: number) => void,
+    debugConfig?: DebugConfig
+): Promise<BattleResult | null> {
+    if (!libs) return null;
+    const total = Math.max(1, Math.round(runs));
+    const results: BattleResult[] = [];
+    onProgress?.(0, total);
+    await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+    for (let index = 0; index < total; index++) {
+        const result = simulateBattle(playerStats, profile, ageIdx, battleIdx, difficultyMode, libs, debugConfig);
+        if (result) results.push(result);
+        onProgress?.(index + 1, total);
+        await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+    }
+    return results.length ? aggregateResults(results, total) : null;
+}
+
 // Helper to aggregate results
 function aggregateResults(results: BattleResult[], totalRunsOverride?: number): BattleResult {
     const wins = results.filter(r => r.victory).length;

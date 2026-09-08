@@ -19,7 +19,7 @@ import { formatNumber } from '../../utils/format';
 import { formatSecondaryStat } from '../../utils/statNames';
 import { getPerfection } from '../../utils/itemCalculations';
 import { PerfectionMeter } from '../../components/UI/PerfectionMeter';
-import { getMainBattleStageSummary, simulateBattleMulti, type BattleResult } from '../../utils/BattleSimulator';
+import { getMainBattleStageSummary, simulateBattleMultiAsync, type BattleResult } from '../../utils/BattleSimulator';
 import { cn } from '../../lib/utils';
 import { BuildGoalSelector } from '../../components/Profile/BuildGoalSelector';
 import { compareBuildGoal, resolveBuildGoal, scoreBuildGoal, type BuildGoalContext, type BuildGoalDefinition } from '../../utils/buildGoals';
@@ -28,6 +28,7 @@ import { scanKnownEquipmentItems } from '../../utils/screenshotItemScanner';
 
 type EquipmentSlot = keyof UserProfile['items'];
 type CompanionLoadout = { pets: PetSlot[]; mount: MountSlot | null };
+type CalculationProgress = { percent: number; label: string; detail: string };
 
 type SwapResult = {
     current: AggregatedStats;
@@ -52,6 +53,8 @@ const readImage = (file: File) => new Promise<string>((resolve, reject) => {
     reader.onerror = () => reject(new Error('The screenshot could not be opened.'));
     reader.readAsDataURL(file);
 });
+
+const yieldForPaint = () => new Promise<void>(resolve => requestAnimationFrame(() => window.setTimeout(resolve, 0)));
 
 function describeSubstats(stats?: { statId: string; value: number }[]) {
     if (!stats?.length) return 'No special stats';
@@ -116,7 +119,7 @@ function estimatedTimeBetweenKills(stats: AggregatedStats, enemyCount: number, w
 
 export default function SwapTest() {
     const { profile, updateNestedProfile } = useProfile();
-    const { optimizeLoadout, calculateProfileStats, isReady } = useProfileOptimizer();
+    const { optimizeLoadoutAsync, calculateProfileStats, isReady } = useProfileOptimizer();
     const { data: petLibrary } = useGameData<any>('PetLibrary.json');
     const { data: secondaryStatLibrary } = useGameData<any>('SecondaryStatLibrary.json');
     const { data: autoItemMapping } = useGameData<any>('AutoItemMapping.json');
@@ -141,6 +144,8 @@ export default function SwapTest() {
     const [autoStageStats, setAutoStageStats] = useState(true);
     const [respectSavedLevels, setRespectSavedLevels] = useState(true);
     const [result, setResult] = useState<SwapResult | null>(null);
+    const [calculationBusy, setCalculationBusy] = useState(false);
+    const [calculationProgress, setCalculationProgress] = useState<CalculationProgress>({ percent: 0, label: '', detail: '' });
     const [itemModalOpen, setItemModalOpen] = useState(false);
     const [petModalOpen, setPetModalOpen] = useState(false);
     const [mountModalOpen, setMountModalOpen] = useState(false);
@@ -245,7 +250,7 @@ export default function SwapTest() {
     );
     const equippedMountId = profile.mount.active?.instanceId;
 
-    const runCalculation = () => {
+    const runCalculation = async () => {
         if (!candidate) {
             toast.info('Choose the gear item you want to test first.');
             return;
@@ -254,47 +259,78 @@ export default function SwapTest() {
             toast.info('Game data is still loading. Try Calculate again in a moment.');
             return;
         }
+        if (calculationBusy) return;
+        setCalculationBusy(true);
+        setResult(null);
+        try {
+            setCalculationProgress({ percent: 3, label: 'Preparing calculations', detail: 'Reading your current profile and selected item.' });
+            await yieldForPaint();
+            const baselineStats = calculateProfileStats(profile);
+            const scoreForGoal = (stats: AggregatedStats) => scoreBuildGoal(activeBuildGoal, stats, baselineStats, {
+                enemyHealth,
+                bossHealth,
+                overheadSeconds: killDowntimeFor(stats),
+            });
 
-        const baselineStats = calculateProfileStats(profile);
-        const scoreForGoal = (stats: AggregatedStats) => scoreBuildGoal(activeBuildGoal, stats, baselineStats, {
-            enemyHealth,
-            bossHealth,
-            overheadSeconds: killDowntimeFor(stats),
-        });
-        const currentBest = optimizeLoadout('balanced', profile, respectSavedLevels, scoreForGoal);
-        const currentLoadout: CompanionLoadout = currentBest || {
-            pets: profile.pets.active,
-            mount: profile.mount.active
-        };
-        const currentOptimizedProfile = withCompanions(profile, currentLoadout);
+            setCalculationProgress({ percent: 8, label: 'Optimizing current companions', detail: 'Preparing pet and mount combinations.' });
+            await yieldForPaint();
+            const currentBest = await optimizeLoadoutAsync('balanced', profile, respectSavedLevels, scoreForGoal, (completed, total) => {
+                setCalculationProgress({
+                    percent: 8 + (completed / Math.max(1, total)) * 32,
+                    label: 'Optimizing current companions',
+                    detail: `Tested ${completed.toLocaleString()} of ${total.toLocaleString()} current-loadout combinations.`,
+                });
+            });
+            const currentLoadout: CompanionLoadout = currentBest || { pets: profile.pets.active, mount: profile.mount.active };
+            const currentOptimizedProfile = withCompanions(profile, currentLoadout);
 
-        const candidateProfile: UserProfile = {
-            ...profile,
-            items: { ...profile.items, [slot]: candidate }
-        };
-        const candidateBest = optimizeLoadout('balanced', candidateProfile, respectSavedLevels, scoreForGoal);
-        const candidateLoadout: CompanionLoadout = candidateBest || {
-            pets: candidateProfile.pets.active,
-            mount: candidateProfile.mount.active
-        };
+            const candidateProfile: UserProfile = { ...profile, items: { ...profile.items, [slot]: candidate } };
+            setCalculationProgress({ percent: 42, label: 'Calculating the new item', detail: `Applying the new ${slot} to your profile.` });
+            await yieldForPaint();
+            const candidateCurrentStats = calculateProfileStats(candidateProfile);
 
-        const currentStats = calculateProfileStats(currentOptimizedProfile);
-        const candidateCurrentStats = calculateProfileStats(candidateProfile);
-        const candidateOptimizedProfile = withCompanions(candidateProfile, candidateLoadout);
-        const candidateOptimizedStats = calculateProfileStats(candidateOptimizedProfile);
-        const stagePrediction = stagePredictionEnabled && battleLibs.mainBattleLibrary
-            ? simulateBattleMulti(candidateOptimizedStats, candidateOptimizedProfile, stageAge, stageBattle, stageDifficulty, battleLibs, stagePredictionRuns)
-            : null;
+            setCalculationProgress({ percent: 45, label: 'Optimizing new-item companions', detail: 'Preparing pet and mount combinations.' });
+            await yieldForPaint();
+            const candidateBest = await optimizeLoadoutAsync('balanced', candidateProfile, respectSavedLevels, scoreForGoal, (completed, total) => {
+                setCalculationProgress({
+                    percent: 45 + (completed / Math.max(1, total)) * 30,
+                    label: 'Optimizing new-item companions',
+                    detail: `Tested ${completed.toLocaleString()} of ${total.toLocaleString()} new-item combinations.`,
+                });
+            });
+            const candidateLoadout: CompanionLoadout = candidateBest || { pets: candidateProfile.pets.active, mount: candidateProfile.mount.active };
 
-        setResult({
-            current: currentStats,
-            candidateCurrent: candidateCurrentStats,
-            candidateOptimized: candidateOptimizedStats,
-            currentLoadout,
-            candidateLoadout,
-            combinations: searchSize(candidateProfile),
-            stagePrediction
-        });
+            setCalculationProgress({ percent: 78, label: 'Building the stat comparison', detail: 'Calculating before, after, and goal-fit changes.' });
+            await yieldForPaint();
+            const currentStats = calculateProfileStats(currentOptimizedProfile);
+            const candidateOptimizedProfile = withCompanions(candidateProfile, candidateLoadout);
+            const candidateOptimizedStats = calculateProfileStats(candidateOptimizedProfile);
+
+            let stagePrediction: BattleResult | null = null;
+            if (stagePredictionEnabled && battleLibs.mainBattleLibrary) {
+                setCalculationProgress({ percent: 82, label: 'Running stage prediction', detail: `Starting ${stagePredictionRuns.toLocaleString()} prediction runs.` });
+                await yieldForPaint();
+                stagePrediction = await simulateBattleMultiAsync(candidateOptimizedStats, candidateOptimizedProfile, stageAge, stageBattle, stageDifficulty, battleLibs, stagePredictionRuns, (completed, total) => {
+                    setCalculationProgress({
+                        percent: 82 + (completed / Math.max(1, total)) * 17,
+                        label: 'Running stage prediction',
+                        detail: `Completed ${completed.toLocaleString()} of ${total.toLocaleString()} prediction runs.`,
+                    });
+                });
+            } else {
+                setCalculationProgress({ percent: 96, label: 'Prediction skipped', detail: 'Quick test is finishing the stat recommendation.' });
+                await yieldForPaint();
+            }
+
+            setResult({ current: currentStats, candidateCurrent: candidateCurrentStats, candidateOptimized: candidateOptimizedStats,
+                currentLoadout, candidateLoadout, combinations: searchSize(candidateProfile), stagePrediction });
+            setCalculationProgress({ percent: 100, label: 'Complete', detail: 'Your swap recommendation is ready.' });
+            await yieldForPaint();
+        } catch (cause) {
+            toast.error(cause instanceof Error ? cause.message : 'The swap calculation could not be completed.');
+        } finally {
+            setCalculationBusy(false);
+        }
     };
 
     const resetTest = () => {
@@ -646,16 +682,21 @@ export default function SwapTest() {
                 </button>
 
                 <div className="flex flex-wrap gap-2">
-                    <Button onClick={runCalculation} disabled={!candidate || !isReady} className="gap-2">
-                        <Calculator className="w-4 h-4" />
-                        Calculate swap
+                    <Button onClick={() => void runCalculation()} disabled={!candidate || !isReady || calculationBusy} className="gap-2">
+                        {calculationBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4" />}
+                        {calculationBusy ? calculationProgress.label : 'Calculate swap'}
                     </Button>
-                    <Button variant="ghost" onClick={resetTest} className="gap-2">
+                    <Button variant="ghost" onClick={resetTest} disabled={calculationBusy} className="gap-2">
                         <RotateCcw className="w-4 h-4" />
                         Reset
                     </Button>
                     {!isReady && <span className="self-center text-xs text-text-muted">Loading game calculation data…</span>}
                 </div>
+                {calculationBusy && <div className="rounded-xl border border-blue-400/30 bg-blue-500/5 p-4" role="status" aria-live="polite">
+                    <div className="flex items-center justify-between gap-3 text-sm"><strong className="text-text-primary">{calculationProgress.label}</strong><span className="font-mono font-bold text-blue-300">{Math.round(calculationProgress.percent)}%</span></div>
+                    <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-black/30"><div className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-blue-400 to-violet-400 transition-[width] duration-200" style={{ width: `${Math.max(2, Math.min(100, calculationProgress.percent))}%` }} /></div>
+                    <p className="mt-2 text-xs leading-5 text-text-muted">{calculationProgress.detail}</p>
+                </div>}
             </section>
 
             {result && recommendation && (

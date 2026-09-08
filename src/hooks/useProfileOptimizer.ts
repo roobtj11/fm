@@ -5,6 +5,32 @@ import { StatEngine, LibraryData } from '../utils/statEngine';
 import { PetSlot, SkillSlot, MountSlot, UserProfile } from '../types/Profile';
 import { MAX_ACTIVE_PETS, MAX_ACTIVE_SKILLS } from '../utils/constants';
 
+const yieldToBrowser = () => new Promise<void>(resolve => window.setTimeout(resolve, 0));
+
+function* petLoadouts(savedPets: PetSlot[], currentPets: PetSlot[]): Generator<PetSlot[]> {
+    const count = savedPets.length;
+    const slots = Math.min(count, MAX_ACTIVE_PETS);
+    if (!count) {
+        yield currentPets;
+        return;
+    }
+    for (let i = 0; i < count; i++) {
+        if (slots === 1) { yield [savedPets[i]]; continue; }
+        for (let j = i + 1; j < count; j++) {
+            if (slots === 2) { yield [savedPets[i], savedPets[j]]; continue; }
+            for (let k = j + 1; k < count; k++) yield [savedPets[i], savedPets[j], savedPets[k]];
+        }
+    }
+}
+
+function combinationCount(n: number, k: number) {
+    if (!n) return 1;
+    if (k < 0 || k > n) return 0;
+    let value = 1;
+    for (let i = 1; i <= Math.min(k, n - k); i++) value = value * (n - i + 1) / i;
+    return Math.max(1, Math.round(value));
+}
+
 export function useProfileOptimizer() {
     const { profile } = useProfile();
     
@@ -168,6 +194,66 @@ export function useProfileOptimizer() {
         return bestPets.length > 0 ? { pets: bestPets, mount: bestMount } : null;
     }, [profile, libs]);
 
+    /** Same exact sweep as optimizeLoadout, but yields regularly so long inventories do not freeze the page. */
+    const optimizeLoadoutAsync = useCallback(async (
+        metric: 'dps' | 'power' | 'lifesteal' | 'balanced',
+        base: UserProfile = profile,
+        respectSavedLevels: boolean = true,
+        scoreOverride?: (stats: ReturnType<StatEngine['calculate']>) => number,
+        onProgress?: (completed: number, total: number) => void
+    ): Promise<{ pets: PetSlot[]; mount: MountSlot | null } | null> => {
+        const savedPets = base.pets.savedBuilds || [];
+        const mountCandidates: (MountSlot | null)[] = [];
+        const seen = new Set<string>();
+        const addMount = (mount: MountSlot | null) => {
+            if (!mount) return;
+            const key = `${mount.id}|${mount.rarity}|${mount.level}|${JSON.stringify(mount.secondaryStats)}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            mountCandidates.push(mount);
+        };
+        (base.mount.savedBuilds || []).forEach(addMount);
+        addMount(base.mount.active);
+        if (!mountCandidates.length) mountCandidates.push(base.mount.active);
+
+        const total = combinationCount(savedPets.length, Math.min(savedPets.length, MAX_ACTIVE_PETS)) * mountCandidates.length;
+        let completed = 0;
+        let bestValue = Number.NEGATIVE_INFINITY;
+        let bestPets: PetSlot[] = [];
+        let bestMount: MountSlot | null = base.mount.active;
+        onProgress?.(0, total);
+        await yieldToBrowser();
+
+        for (const petSet of petLoadouts(savedPets, base.pets.active)) {
+            for (const mount of mountCandidates) {
+                const scoredPets = respectSavedLevels ? petSet : petSet.map(pet => ({ ...pet, level: 1 }));
+                const scoredMount = respectSavedLevels || !mount ? mount : { ...mount, level: 1 };
+                const tempProfile: UserProfile = {
+                    ...base,
+                    pets: { ...base.pets, active: scoredPets },
+                    mount: { ...base.mount, active: scoredMount },
+                };
+                const stats = new StatEngine(tempProfile, libs).calculate();
+                const value = scoreOverride ? scoreOverride(stats)
+                    : metric === 'dps' ? stats.realTotalDps
+                        : metric === 'power' ? stats.power
+                            : metric === 'balanced' ? stats.realTotalDps * stats.realTotalHps
+                                : stats.realWeaponDps * stats.lifeSteal;
+                if (value > bestValue) {
+                    bestValue = value;
+                    bestPets = petSet;
+                    bestMount = mount;
+                }
+                completed++;
+                if (completed % 5 === 0 || completed === total) {
+                    onProgress?.(completed, total);
+                    await yieldToBrowser();
+                }
+            }
+        }
+        return bestPets.length ? { pets: bestPets, mount: bestMount } : null;
+    }, [profile, libs]);
+
     const optimizeSkills = useCallback((): SkillSlot[] | null => {
         if (!skillLibrary) return null;
 
@@ -231,6 +317,7 @@ export function useProfileOptimizer() {
 
     return {
         optimizeLoadout,
+        optimizeLoadoutAsync,
         optimizeSkills,
         calculateProfileStats,
         isReady: !!petLibrary && !!skillLibrary && !!mountUpgradeLibrary && !!itemBalancingConfig
