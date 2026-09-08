@@ -194,15 +194,26 @@ export function useProfileOptimizer() {
         return bestPets.length > 0 ? { pets: bestPets, mount: bestMount } : null;
     }, [profile, libs]);
 
-    /** Same exact sweep as optimizeLoadout, but yields regularly so long inventories do not freeze the page. */
+    /**
+     * Cooperative loadout search. Fast mode scores every candidate individually, keeps the
+     * strongest goal-fit choices plus stat specialists, then exhaustively combines that shortlist.
+     */
     const optimizeLoadoutAsync = useCallback(async (
         metric: 'dps' | 'power' | 'lifesteal' | 'balanced',
         base: UserProfile = profile,
         respectSavedLevels: boolean = true,
         scoreOverride?: (stats: ReturnType<StatEngine['calculate']>) => number,
-        onProgress?: (completed: number, total: number) => void
-    ): Promise<{ pets: PetSlot[]; mount: MountSlot | null } | null> => {
+        onProgress?: (completed: number, total: number, phase: 'screening' | 'combinations') => void,
+        strategy: 'fast' | 'exact' = 'exact'
+    ): Promise<{ pets: PetSlot[]; mount: MountSlot | null; combinations: number; screened: number; strategy: 'fast' | 'exact' } | null> => {
+        const petKey = (pet: PetSlot) => pet.instanceId || `${pet.id}|${pet.rarity}|${pet.level}|${JSON.stringify(pet.secondaryStats)}`;
         const savedPets = base.pets.savedBuilds || [];
+        const petPool: PetSlot[] = [];
+        const seenPets = new Set<string>();
+        for (const pet of [...savedPets, ...base.pets.active]) {
+            const key = petKey(pet);
+            if (!seenPets.has(key)) { seenPets.add(key); petPool.push(pet); }
+        }
         const mountCandidates: (MountSlot | null)[] = [];
         const seen = new Set<string>();
         const addMount = (mount: MountSlot | null) => {
@@ -216,29 +227,95 @@ export function useProfileOptimizer() {
         addMount(base.mount.active);
         if (!mountCandidates.length) mountCandidates.push(base.mount.active);
 
-        const total = combinationCount(savedPets.length, Math.min(savedPets.length, MAX_ACTIVE_PETS)) * mountCandidates.length;
+        const scoreStats = (stats: ReturnType<StatEngine['calculate']>) => scoreOverride ? scoreOverride(stats)
+            : metric === 'dps' ? stats.realTotalDps
+                : metric === 'power' ? stats.power
+                    : metric === 'balanced' ? stats.realTotalDps * stats.realTotalHps
+                        : stats.realWeaponDps * stats.lifeSteal;
+        const statsFor = (pets: PetSlot[], mount: MountSlot | null) => {
+            const scoredPets = respectSavedLevels ? pets : pets.map(pet => ({ ...pet, level: 1 }));
+            const scoredMount = respectSavedLevels || !mount ? mount : { ...mount, level: 1 };
+            return new StatEngine({
+                ...base,
+                pets: { ...base.pets, active: scoredPets },
+                mount: { ...base.mount, active: scoredMount },
+            }, libs).calculate();
+        };
+
+        let searchPets = petPool;
+        let searchMounts = mountCandidates;
+        let screenedCandidates = 0;
+        if (strategy === 'fast') {
+            type Scored<T> = { entry: T; score: number; stats: ReturnType<StatEngine['calculate']> };
+            const scoredPets: Scored<PetSlot>[] = [];
+            const scoredMounts: Scored<MountSlot | null>[] = [];
+            const screeningTotal = petPool.length + mountCandidates.length;
+            screenedCandidates = screeningTotal;
+            let screened = 0;
+            onProgress?.(0, Math.max(1, screeningTotal), 'screening');
+            await yieldToBrowser();
+
+            for (const pet of petPool) {
+                const key = petKey(pet);
+                const companions = [pet, ...base.pets.active.filter(active => petKey(active) !== key)].slice(0, MAX_ACTIVE_PETS);
+                const stats = statsFor(companions, base.mount.active);
+                scoredPets.push({ entry: pet, score: scoreStats(stats), stats });
+                screened++;
+                if (screened % 5 === 0 || screened === screeningTotal) {
+                    onProgress?.(screened, Math.max(1, screeningTotal), 'screening');
+                    await yieldToBrowser();
+                }
+            }
+            for (const mount of mountCandidates) {
+                const stats = statsFor(base.pets.active, mount);
+                scoredMounts.push({ entry: mount, score: scoreStats(stats), stats });
+                screened++;
+                if (screened % 5 === 0 || screened === screeningTotal) {
+                    onProgress?.(screened, Math.max(1, screeningTotal), 'screening');
+                    await yieldToBrowser();
+                }
+            }
+
+            const signals = [
+                (stats: ReturnType<StatEngine['calculate']>) => stats.realTotalDps,
+                (stats: ReturnType<StatEngine['calculate']>) => stats.realTotalHps,
+                (stats: ReturnType<StatEngine['calculate']>) => stats.power,
+                (stats: ReturnType<StatEngine['calculate']>) => stats.criticalChance,
+                (stats: ReturnType<StatEngine['calculate']>) => stats.criticalDamage,
+                (stats: ReturnType<StatEngine['calculate']>) => stats.attackSpeedMultiplier,
+                (stats: ReturnType<StatEngine['calculate']>) => stats.lifeSteal,
+                (stats: ReturnType<StatEngine['calculate']>) => stats.skillDamageMultiplier,
+            ];
+            const choosePets = new Map<string, PetSlot>();
+            const addPet = (pet?: PetSlot) => { if (pet && choosePets.size < 12) choosePets.set(petKey(pet), pet); };
+            base.pets.active.forEach(addPet);
+            [...scoredPets].sort((a, b) => b.score - a.score).slice(0, 6).forEach(item => addPet(item.entry));
+            for (const signal of signals) addPet([...scoredPets].sort((a, b) => signal(b.stats) - signal(a.stats))[0]?.entry);
+            for (const item of [...scoredPets].sort((a, b) => b.score - a.score)) addPet(item.entry);
+            searchPets = [...choosePets.values()];
+
+            const chooseMounts = new Map<string, MountSlot | null>();
+            const mountKey = (mount: MountSlot | null) => mount ? `${mount.id}|${mount.rarity}|${mount.level}|${JSON.stringify(mount.secondaryStats)}` : 'none';
+            const addChosenMount = (mount: MountSlot | null | undefined) => { if (mount !== undefined && chooseMounts.size < 6) chooseMounts.set(mountKey(mount), mount); };
+            addChosenMount(base.mount.active);
+            [...scoredMounts].sort((a, b) => b.score - a.score).slice(0, 3).forEach(item => addChosenMount(item.entry));
+            for (const signal of signals) addChosenMount([...scoredMounts].sort((a, b) => signal(b.stats) - signal(a.stats))[0]?.entry);
+            for (const item of [...scoredMounts].sort((a, b) => b.score - a.score)) addChosenMount(item.entry);
+            searchMounts = [...chooseMounts.values()];
+        }
+
+        const total = combinationCount(searchPets.length, Math.min(searchPets.length, MAX_ACTIVE_PETS)) * searchMounts.length;
         let completed = 0;
         let bestValue = Number.NEGATIVE_INFINITY;
         let bestPets: PetSlot[] = [];
         let bestMount: MountSlot | null = base.mount.active;
-        onProgress?.(0, total);
+        onProgress?.(0, total, 'combinations');
         await yieldToBrowser();
 
-        for (const petSet of petLoadouts(savedPets, base.pets.active)) {
-            for (const mount of mountCandidates) {
-                const scoredPets = respectSavedLevels ? petSet : petSet.map(pet => ({ ...pet, level: 1 }));
-                const scoredMount = respectSavedLevels || !mount ? mount : { ...mount, level: 1 };
-                const tempProfile: UserProfile = {
-                    ...base,
-                    pets: { ...base.pets, active: scoredPets },
-                    mount: { ...base.mount, active: scoredMount },
-                };
-                const stats = new StatEngine(tempProfile, libs).calculate();
-                const value = scoreOverride ? scoreOverride(stats)
-                    : metric === 'dps' ? stats.realTotalDps
-                        : metric === 'power' ? stats.power
-                            : metric === 'balanced' ? stats.realTotalDps * stats.realTotalHps
-                                : stats.realWeaponDps * stats.lifeSteal;
+        for (const petSet of petLoadouts(searchPets, base.pets.active)) {
+            for (const mount of searchMounts) {
+                const stats = statsFor(petSet, mount);
+                const value = scoreStats(stats);
                 if (value > bestValue) {
                     bestValue = value;
                     bestPets = petSet;
@@ -246,12 +323,12 @@ export function useProfileOptimizer() {
                 }
                 completed++;
                 if (completed % 5 === 0 || completed === total) {
-                    onProgress?.(completed, total);
+                    onProgress?.(completed, total, 'combinations');
                     await yieldToBrowser();
                 }
             }
         }
-        return bestPets.length ? { pets: bestPets, mount: bestMount } : null;
+        return completed ? { pets: bestPets, mount: bestMount, combinations: total, screened: screenedCandidates, strategy } : null;
     }, [profile, libs]);
 
     const optimizeSkills = useCallback((): SkillSlot[] | null => {

@@ -31,12 +31,19 @@ type CompanionLoadout = { pets: PetSlot[]; mount: MountSlot | null };
 type CalculationProgress = { percent: number; label: string; detail: string };
 
 type SwapResult = {
+    slot: EquipmentSlot;
+    item: ItemSlot;
     current: AggregatedStats;
     candidateCurrent: AggregatedStats;
     candidateOptimized: AggregatedStats;
     currentLoadout: CompanionLoadout;
     candidateLoadout: CompanionLoadout;
     combinations: number;
+    screened: number;
+    strategy: 'fast' | 'exact';
+    goal: BuildGoalDefinition;
+    contexts: { current: BuildGoalContext; candidateCurrent: BuildGoalContext; candidateOptimized: BuildGoalContext };
+    stage: { difficulty: number; age: number; battle: number; predictionEnabled: boolean };
     stagePrediction: BattleResult | null;
 };
 
@@ -55,6 +62,13 @@ const readImage = (file: File) => new Promise<string>((resolve, reject) => {
 });
 
 const yieldForPaint = () => new Promise<void>(resolve => requestAnimationFrame(() => window.setTimeout(resolve, 0)));
+
+function formatTimeRemaining(milliseconds: number) {
+    const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
+    if (seconds < 60) return `${seconds}s left`;
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}m ${seconds % 60}s left`;
+}
 
 function describeSubstats(stats?: { statId: string; value: number }[]) {
     if (!stats?.length) return 'No special stats';
@@ -143,9 +157,11 @@ export default function SwapTest() {
     const [stagePredictionRuns, setStagePredictionRuns] = useState(10);
     const [autoStageStats, setAutoStageStats] = useState(true);
     const [respectSavedLevels, setRespectSavedLevels] = useState(true);
+    const [optimizerStrategy, setOptimizerStrategy] = useState<'fast' | 'exact'>('fast');
     const [result, setResult] = useState<SwapResult | null>(null);
     const [calculationBusy, setCalculationBusy] = useState(false);
     const [calculationProgress, setCalculationProgress] = useState<CalculationProgress>({ percent: 0, label: '', detail: '' });
+    const [calculationStartedAt, setCalculationStartedAt] = useState(0);
     const [itemModalOpen, setItemModalOpen] = useState(false);
     const [petModalOpen, setPetModalOpen] = useState(false);
     const [mountModalOpen, setMountModalOpen] = useState(false);
@@ -194,7 +210,6 @@ export default function SwapTest() {
             if (!proposed) throw new Error('The new comparison item could not be separated from the equipped item.');
             setSlot(group.slot);
             setCandidate(proposed.item);
-            setResult(null);
             setSwapScanSummary(`Detected ${group.items[equippedIndex].name} as equipped and loaded ${proposed.name} as the new ${group.slot}. Verify its level and special stats before running the test.`);
         } catch (cause) {
             setSwapScanError(cause instanceof Error ? cause.message : 'The swap screenshot could not be read.');
@@ -261,6 +276,7 @@ export default function SwapTest() {
         }
         if (calculationBusy) return;
         setCalculationBusy(true);
+        setCalculationStartedAt(Date.now());
         setResult(null);
         try {
             setCalculationProgress({ percent: 3, label: 'Preparing calculations', detail: 'Reading your current profile and selected item.' });
@@ -274,13 +290,16 @@ export default function SwapTest() {
 
             setCalculationProgress({ percent: 8, label: 'Optimizing current companions', detail: 'Preparing pet and mount combinations.' });
             await yieldForPaint();
-            const currentBest = await optimizeLoadoutAsync('balanced', profile, respectSavedLevels, scoreForGoal, (completed, total) => {
+            const currentBest = await optimizeLoadoutAsync('balanced', profile, respectSavedLevels, scoreForGoal, (completed, total, phase) => {
+                const fraction = completed / Math.max(1, total);
                 setCalculationProgress({
-                    percent: 8 + (completed / Math.max(1, total)) * 32,
-                    label: 'Optimizing current companions',
-                    detail: `Tested ${completed.toLocaleString()} of ${total.toLocaleString()} current-loadout combinations.`,
+                    percent: 8 + (phase === 'screening' ? fraction * 9 : 9 + fraction * 23),
+                    label: phase === 'screening' ? 'Screening every current companion' : 'Optimizing current companions',
+                    detail: phase === 'screening'
+                        ? `Checked ${completed.toLocaleString()} of ${total.toLocaleString()} pets and mounts for goal fit.`
+                        : `Tested ${completed.toLocaleString()} of ${total.toLocaleString()} shortlisted combinations.`,
                 });
-            });
+            }, optimizerStrategy);
             const currentLoadout: CompanionLoadout = currentBest || { pets: profile.pets.active, mount: profile.mount.active };
             const currentOptimizedProfile = withCompanions(profile, currentLoadout);
 
@@ -291,13 +310,16 @@ export default function SwapTest() {
 
             setCalculationProgress({ percent: 45, label: 'Optimizing new-item companions', detail: 'Preparing pet and mount combinations.' });
             await yieldForPaint();
-            const candidateBest = await optimizeLoadoutAsync('balanced', candidateProfile, respectSavedLevels, scoreForGoal, (completed, total) => {
+            const candidateBest = await optimizeLoadoutAsync('balanced', candidateProfile, respectSavedLevels, scoreForGoal, (completed, total, phase) => {
+                const fraction = completed / Math.max(1, total);
                 setCalculationProgress({
-                    percent: 45 + (completed / Math.max(1, total)) * 30,
-                    label: 'Optimizing new-item companions',
-                    detail: `Tested ${completed.toLocaleString()} of ${total.toLocaleString()} new-item combinations.`,
+                    percent: 45 + (phase === 'screening' ? fraction * 8 : 8 + fraction * 22),
+                    label: phase === 'screening' ? 'Screening every new-item companion' : 'Optimizing new-item companions',
+                    detail: phase === 'screening'
+                        ? `Checked ${completed.toLocaleString()} of ${total.toLocaleString()} pets and mounts with the new item.`
+                        : `Tested ${completed.toLocaleString()} of ${total.toLocaleString()} shortlisted combinations.`,
                 });
-            });
+            }, optimizerStrategy);
             const candidateLoadout: CompanionLoadout = candidateBest || { pets: candidateProfile.pets.active, mount: candidateProfile.mount.active };
 
             setCalculationProgress({ percent: 78, label: 'Building the stat comparison', detail: 'Calculating before, after, and goal-fit changes.' });
@@ -322,8 +344,18 @@ export default function SwapTest() {
                 await yieldForPaint();
             }
 
-            setResult({ current: currentStats, candidateCurrent: candidateCurrentStats, candidateOptimized: candidateOptimizedStats,
-                currentLoadout, candidateLoadout, combinations: searchSize(candidateProfile), stagePrediction });
+            const contexts = {
+                current: { enemyHealth, bossHealth, overheadSeconds: killDowntimeFor(currentStats) },
+                candidateCurrent: { enemyHealth, bossHealth, overheadSeconds: killDowntimeFor(candidateCurrentStats) },
+                candidateOptimized: { enemyHealth, bossHealth, overheadSeconds: killDowntimeFor(candidateOptimizedStats) },
+            };
+            setResult({ slot, item: candidate, current: currentStats, candidateCurrent: candidateCurrentStats, candidateOptimized: candidateOptimizedStats,
+                currentLoadout, candidateLoadout,
+                combinations: (currentBest?.combinations || searchSize(profile)) + (candidateBest?.combinations || searchSize(candidateProfile)),
+                screened: (currentBest?.screened || 0) + (candidateBest?.screened || 0),
+                strategy: optimizerStrategy, goal: activeBuildGoal, contexts,
+                stage: { difficulty: stageDifficulty, age: stageAge, battle: stageBattle, predictionEnabled: stagePredictionEnabled },
+                stagePrediction });
             setCalculationProgress({ percent: 100, label: 'Complete', detail: 'Your swap recommendation is ready.' });
             await yieldForPaint();
         } catch (cause) {
@@ -340,27 +372,25 @@ export default function SwapTest() {
     };
 
     const equipSwap = (includeCompanions: boolean) => {
-        if (!candidate || !result) return;
-        const previous = profile.items[slot];
+        if (!result) return;
+        const previous = profile.items[result.slot];
         if (previous) {
-            const existing = profile.savedItems?.[slot] || [];
+            const existing = profile.savedItems?.[result.slot] || [];
             updateNestedProfile('savedItems', {
-                [slot]: [
-                    { ...previous, customName: `Previous ${slot} · Lv. ${previous.level}` },
+                [result.slot]: [
+                    { ...previous, customName: `Previous ${result.slot} · Lv. ${previous.level}` },
                     ...existing
                 ]
             });
         }
-        updateNestedProfile('items', { [slot]: candidate });
+        updateNestedProfile('items', { [result.slot]: result.item });
         if (includeCompanions) {
             updateNestedProfile('pets', { active: result.candidateLoadout.pets });
             updateNestedProfile('mount', { active: result.candidateLoadout.mount });
         }
         toast.success(includeCompanions
-            ? `${slot} equipped with the best companions for ${activeBuildGoal.name}. Previous gear was saved.`
-            : `${slot} equipped. Your current pets and mount were left unchanged.`);
-        setResult(null);
-        setCandidate(null);
+            ? `${result.slot} equipped with the best companions for ${result.goal.name}. Previous gear was saved.`
+            : `${result.slot} equipped. Your current pets and mount were left unchanged.`);
     };
 
     const savePet = (pet: PetSlot | null) => {
@@ -437,16 +467,16 @@ export default function SwapTest() {
 
     const recommendation = useMemo(() => {
         if (!result) return null;
-        const comparison = compareBuildGoal(activeBuildGoal, result.current, result.candidateOptimized, {
-            enemyHealth,
-            bossHealth,
-            overheadSeconds: killDowntimeFor(result.candidateOptimized),
-        });
+        const comparison = compareBuildGoal(result.goal, result.current, result.candidateOptimized, result.contexts.candidateOptimized);
         const change = comparison.changePercent;
         if (change > 1) return { label: 'Equip the new item', change, color: 'emerald' };
         if (change < -1) return { label: 'Keep the current item', change, color: 'red' };
         return { label: 'Sidegrade / situational', change, color: 'amber' };
-    }, [result, activeBuildGoal, enemyHealth, bossHealth, overheadSeconds, autoStageStats, stageSummary]);
+    }, [result]);
+
+    const remainingTime = calculationBusy && calculationStartedAt > 0 && calculationProgress.percent >= 3 && calculationProgress.percent < 100
+        ? formatTimeRemaining((Date.now() - calculationStartedAt) * (100 - calculationProgress.percent) / calculationProgress.percent)
+        : 'estimating';
 
     return (
         <div className="space-y-6 animate-fade-in pb-20 max-w-7xl mx-auto">
@@ -486,7 +516,7 @@ export default function SwapTest() {
                     {EQUIPMENT_SLOTS.map(value => (
                         <button
                             key={value}
-                            onClick={() => { setSlot(value); setCandidate(null); setResult(null); }}
+                            onClick={() => { setSlot(value); setCandidate(null); }}
                             className={cn(
                                 'rounded-xl border px-3 py-2 text-sm font-medium transition-colors',
                                 slot === value
@@ -527,7 +557,6 @@ export default function SwapTest() {
                     value={profile.misc.buildGoals}
                     onChange={buildGoals => {
                         updateNestedProfile('misc', { buildGoals });
-                        setResult(null);
                     }}
                 />
 
@@ -543,7 +572,6 @@ export default function SwapTest() {
                             <button
                                 onClick={() => {
                                     setStagePredictionEnabled(value => !value);
-                                    setResult(null);
                                 }}
                                 className={cn(
                                     'rounded-lg border px-3 py-2 text-xs font-semibold transition-colors',
@@ -575,7 +603,6 @@ export default function SwapTest() {
                                 value={stageDifficulty}
                                 onChange={event => {
                                     setStageDifficulty(Number(event.target.value));
-                                    setResult(null);
                                 }}
                                 className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
                             >
@@ -590,7 +617,6 @@ export default function SwapTest() {
                                 onChange={event => {
                                     setStageAge(Number(event.target.value));
                                     setStageBattle(0);
-                                    setResult(null);
                                 }}
                                 className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
                             >
@@ -605,7 +631,6 @@ export default function SwapTest() {
                                 value={stageBattle}
                                 onChange={event => {
                                     setStageBattle(Number(event.target.value));
-                                    setResult(null);
                                 }}
                                 className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
                             >
@@ -632,7 +657,6 @@ export default function SwapTest() {
                                 onChange={event => {
                                     const nextRuns = Math.max(1, Math.min(1000, Math.round(Number(event.target.value) || 10)));
                                     setStagePredictionRuns(nextRuns);
-                                    setResult(null);
                                 }}
                                 className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary"
                             />
@@ -669,17 +693,33 @@ export default function SwapTest() {
                     Auto timing uses the same battle model as Progress Prediction: stage wave count, enemy spawn distance, movement speed, your weapon range, and the one-second delay between waves. Switch Auto-fill off only to test a custom farming delay.
                 </p>
 
-                <button
-                    onClick={() => { setRespectSavedLevels(v => !v); setResult(null); }}
-                    className={cn(
-                        'rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
-                        respectSavedLevels
-                            ? 'bg-accent-primary/15 border-accent-primary/40 text-text-primary'
-                            : 'border-border text-text-secondary'
-                    )}
-                >
-                    Companion levels: {respectSavedLevels ? 'Use saved levels' : 'Compare special stats at level 1'}
-                </button>
+                <div className="flex flex-wrap gap-2">
+                    <button
+                        onClick={() => setRespectSavedLevels(v => !v)}
+                        className={cn(
+                            'rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                            respectSavedLevels
+                                ? 'bg-accent-primary/15 border-accent-primary/40 text-text-primary'
+                                : 'border-border text-text-secondary'
+                        )}
+                    >
+                        Companion levels: {respectSavedLevels ? 'Use saved levels' : 'Compare special stats at level 1'}
+                    </button>
+                    <button
+                        onClick={() => setOptimizerStrategy(value => value === 'fast' ? 'exact' : 'fast')}
+                        className={cn(
+                            'rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                            optimizerStrategy === 'fast'
+                                ? 'bg-cyan-500/15 border-cyan-400/40 text-cyan-200'
+                                : 'bg-violet-500/15 border-violet-400/40 text-violet-200'
+                        )}
+                    >
+                        Companion search: {optimizerStrategy === 'fast' ? 'Fast shortlist' : 'Exact all combinations'}
+                    </button>
+                </div>
+                <p className="text-[11px] leading-5 text-text-muted">
+                    Fast mode checks every saved and equipped pet and mount individually, then tests combinations of the strongest goal-fit choices and stat specialists. Exact mode tests every possible companion combination and may take much longer.
+                </p>
 
                 <div className="flex flex-wrap gap-2">
                     <Button onClick={() => void runCalculation()} disabled={!candidate || !isReady || calculationBusy} className="gap-2">
@@ -693,7 +733,7 @@ export default function SwapTest() {
                     {!isReady && <span className="self-center text-xs text-text-muted">Loading game calculation data…</span>}
                 </div>
                 {calculationBusy && <div className="rounded-xl border border-blue-400/30 bg-blue-500/5 p-4" role="status" aria-live="polite">
-                    <div className="flex items-center justify-between gap-3 text-sm"><strong className="text-text-primary">{calculationProgress.label}</strong><span className="font-mono font-bold text-blue-300">{Math.round(calculationProgress.percent)}%</span></div>
+                    <div className="flex items-center justify-between gap-3 text-sm"><strong className="text-text-primary">{calculationProgress.label}</strong><span className="font-mono font-bold text-blue-300">{Math.round(calculationProgress.percent)}% · {remainingTime}</span></div>
                     <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-black/30"><div className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-blue-400 to-violet-400 transition-[width] duration-200" style={{ width: `${Math.max(2, Math.min(100, calculationProgress.percent))}%` }} /></div>
                     <p className="mt-2 text-xs leading-5 text-text-muted">{calculationProgress.detail}</p>
                 </div>}
@@ -708,7 +748,7 @@ export default function SwapTest() {
                 )}>
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div>
-                            <div className="text-xs uppercase tracking-wider text-text-muted">{activeBuildGoal.name} recommendation</div>
+                            <div className="text-xs uppercase tracking-wider text-text-muted">{result.goal.name} recommendation</div>
                             <h2 className="text-2xl font-bold text-text-primary mt-1">{recommendation.label}</h2>
                             <p className="text-sm text-text-secondary mt-1">
                                 {recommendation.change >= 0 ? '+' : ''}{recommendation.change.toFixed(2)}% after companion re-optimization.
@@ -716,7 +756,9 @@ export default function SwapTest() {
                         </div>
                         <div className="flex items-center gap-2">
                             <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs font-bold text-emerald-300">
-                                Exact · {result.combinations.toLocaleString()} combinations
+                                {result.strategy === 'fast'
+                                    ? `Fast · ${result.screened.toLocaleString()} screened · ${result.combinations.toLocaleString()} combinations`
+                                    : `Exact · ${result.combinations.toLocaleString()} combinations`}
                             </span>
                             <Button variant="outline" onClick={() => equipSwap(false)} className="gap-2">
                                 <Check className="w-4 h-4" />
@@ -729,9 +771,13 @@ export default function SwapTest() {
                         </div>
                     </div>
 
+                    <p className="rounded-lg border border-border bg-bg-primary/20 px-3 py-2 text-xs text-text-muted">
+                        This completed result stays visible while you change goals, stages, or equipment. Press Calculate swap to replace it, or Reset to clear it.
+                    </p>
+
                     <div className={cn(
                         'rounded-xl border p-4',
-                        !stagePredictionEnabled
+                        !result.stage.predictionEnabled
                             ? 'border-border bg-bg-primary/20'
                             : result.stagePrediction && result.stagePrediction.winProbability >= 50
                                 ? 'border-emerald-400/40 bg-emerald-500/10'
@@ -743,10 +789,10 @@ export default function SwapTest() {
                                     <Target className="h-4 w-4" /> New-item stage prediction
                                 </div>
                                 <p className="mt-1 text-xs text-text-secondary">
-                                    {stageDifficulty === 1 ? 'Hard' : 'Normal'} {stageAge + 1}-{stageBattle + 1}, with the new item and its best companion loadout.
+                                    {result.stage.difficulty === 1 ? 'Hard' : 'Normal'} {result.stage.age + 1}-{result.stage.battle + 1}, with the new item and its best companion loadout.
                                 </p>
                             </div>
-                            {!stagePredictionEnabled ? (
+                            {!result.stage.predictionEnabled ? (
                                 <div className="text-xs font-bold text-text-muted">Skipped · Quick test</div>
                             ) : result.stagePrediction ? (
                                 <div className="text-left sm:text-right">
@@ -762,9 +808,9 @@ export default function SwapTest() {
                     </div>
 
                     <div className="grid lg:grid-cols-3 gap-3">
-                        <MetricCard title="Current, optimized" stats={result.current} baseline={result.current} goal={activeBuildGoal} context={{ enemyHealth, bossHealth, overheadSeconds: killDowntimeFor(result.current) }} />
-                        <MetricCard title="New item, current companions" stats={result.candidateCurrent} baseline={result.current} goal={activeBuildGoal} context={{ enemyHealth, bossHealth, overheadSeconds: killDowntimeFor(result.candidateCurrent) }} />
-                        <MetricCard title="New item, re-optimized" stats={result.candidateOptimized} baseline={result.current} goal={activeBuildGoal} context={{ enemyHealth, bossHealth, overheadSeconds: killDowntimeFor(result.candidateOptimized) }} highlight />
+                        <MetricCard title="Current, optimized" stats={result.current} baseline={result.current} goal={result.goal} context={result.contexts.current} />
+                        <MetricCard title="New item, current companions" stats={result.candidateCurrent} baseline={result.current} goal={result.goal} context={result.contexts.candidateCurrent} />
+                        <MetricCard title="New item, re-optimized" stats={result.candidateOptimized} baseline={result.current} goal={result.goal} context={result.contexts.candidateOptimized} highlight />
                     </div>
 
                     <StatComparison current={result.current} candidateCurrent={result.candidateCurrent} candidateOptimized={result.candidateOptimized} />
@@ -845,7 +891,7 @@ export default function SwapTest() {
             <ItemSelectorModal
                 isOpen={itemModalOpen}
                 onClose={() => setItemModalOpen(false)}
-                onSelect={item => { setCandidate(item); setResult(null); }}
+                onSelect={item => setCandidate(item)}
                 slot={slot}
                 current={candidate || currentItem}
                 forgeAscensionLevel={profile.misc.forgeAscensionLevel}
