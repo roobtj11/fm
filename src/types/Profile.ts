@@ -120,6 +120,7 @@ export interface CustomBuildGoal {
 export interface BuildGoalSettings {
     activeGoalId: string;
     customGoals: CustomBuildGoal[];
+    weaponStyle: 'melee' | 'ranged';
 }
 
 export type FairyName = 'Mira' | 'Tira' | 'Lora';
@@ -349,7 +350,7 @@ export const INITIAL_PROFILE: UserProfile = {
         techPlanMetadata: { isAuto: false },
         useSkinWindup: true,
         swapCalculatorStage: { age: 0, battle: 0, difficulty: 0 },
-        buildGoals: { activeGoalId: 'balanced_late_game', customGoals: [] },
+        buildGoals: { activeGoalId: 'balanced_late_game', customGoals: [], weaponStyle: 'melee' },
         fairy: { active: 'Mira', level: 1, useManualSources: false, manualSources: {} },
         scannerTrainingExamples: [],
         scannerContributionEnabled: true,

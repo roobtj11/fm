@@ -60,18 +60,6 @@ const preset = (id: string, name: string, shortDescription: string, explanation:
 });
 
 export const BUILD_GOAL_PRESETS: BuildGoalDefinition[] = [
-    preset('melee_weapon', 'Melee weapon build', 'Favor melee weapons and the substats that make them stronger.', 'Requires a melee weapon when comparing weapons. Swaps are then scored by real damage plus Melee Damage, Attack Speed, Double Chance, Critical Chance, and Lifesteal substats.', [
-        { metric: 'melee_weapon_match', weight: 5, target: 1, required: true }, { metric: 'real_dps', weight: 3 },
-        { metric: 'melee_damage_substat', weight: 2.5 }, { metric: 'attack_speed_substat', weight: 1.5 },
-        { metric: 'double_chance_substat', weight: 1.25 }, { metric: 'crit_chance_substat', weight: 1 },
-        { metric: 'lifesteal_substat', weight: 0.75 },
-    ]),
-    preset('ranged_weapon', 'Ranged weapon build', 'Favor ranged weapons and the substats that make them stronger.', 'Requires a ranged weapon when comparing weapons. Swaps are then scored by real damage plus Ranged Damage, Attack Speed, Critical Chance, Double Chance, and movement substats.', [
-        { metric: 'ranged_weapon_match', weight: 5, target: 1, required: true }, { metric: 'real_dps', weight: 3 },
-        { metric: 'ranged_damage_substat', weight: 2.5 }, { metric: 'attack_speed_substat', weight: 1.5 },
-        { metric: 'crit_chance_substat', weight: 1.25 }, { metric: 'double_chance_substat', weight: 1 },
-        { metric: 'move_speed_substat', weight: 0.75 },
-    ]),
     preset('balanced_late_game', 'Balanced late-game', 'Advance without creating a damage or survival weakness.', 'Uses a weighted blend of real DPS, real healing, total health, lifesteal, attack speed, and block. A swap must improve the combined late-game profile instead of winning on one headline number alone.', [
         { metric: 'real_dps', weight: 3 }, { metric: 'real_hps', weight: 2.5 }, { metric: 'total_health', weight: 2 },
         { metric: 'lifesteal', weight: 1.5 }, { metric: 'attack_speed', weight: 1 }, { metric: 'block_chance', weight: 0.75 },
@@ -108,11 +96,17 @@ export const BUILD_GOAL_PRESETS: BuildGoalDefinition[] = [
 export const DEFAULT_BUILD_GOAL_SETTINGS: BuildGoalSettings = {
     activeGoalId: 'balanced_late_game',
     customGoals: [],
+    weaponStyle: 'melee',
 };
 
 export function normalizeBuildGoalSettings(settings?: BuildGoalSettings): BuildGoalSettings {
+    const legacyStyle = settings?.activeGoalId === 'ranged_weapon' ? 'ranged'
+        : settings?.activeGoalId === 'melee_weapon' ? 'melee'
+            : undefined;
+    const legacyGoal = settings?.activeGoalId === 'ranged_weapon' || settings?.activeGoalId === 'melee_weapon';
     return {
-        activeGoalId: settings?.activeGoalId || DEFAULT_BUILD_GOAL_SETTINGS.activeGoalId,
+        activeGoalId: legacyGoal ? DEFAULT_BUILD_GOAL_SETTINGS.activeGoalId : (settings?.activeGoalId || DEFAULT_BUILD_GOAL_SETTINGS.activeGoalId),
+        weaponStyle: settings?.weaponStyle || legacyStyle || DEFAULT_BUILD_GOAL_SETTINGS.weaponStyle,
         customGoals: (settings?.customGoals || []).map(goal => {
             const rules = goal.rules.filter(rule => SUBSTAT_GOAL_IDS.has(rule.metric));
             return { ...goal, rules: rules.length ? rules : defaultCustomSubstatRules() };
@@ -123,8 +117,25 @@ export function normalizeBuildGoalSettings(settings?: BuildGoalSettings): BuildG
 export function resolveBuildGoal(settings?: BuildGoalSettings): BuildGoalDefinition {
     const normalized = normalizeBuildGoalSettings(settings);
     const custom = normalized.customGoals.find(goal => goal.id === normalized.activeGoalId);
-    if (custom) return { ...custom, shortDescription: custom.description, explanation: custom.description || 'Uses your custom targets, limits, required thresholds, and relative stat weights.', custom: true };
-    return BUILD_GOAL_PRESETS.find(goal => goal.id === normalized.activeGoalId) || BUILD_GOAL_PRESETS[0];
+    const base = custom
+        ? { ...custom, shortDescription: custom.description, explanation: custom.description || 'Uses your custom targets, limits, required thresholds, and relative stat weights.', custom: true }
+        : (BUILD_GOAL_PRESETS.find(goal => goal.id === normalized.activeGoalId) || BUILD_GOAL_PRESETS[0]);
+    return applyWeaponStyle(base, normalized.weaponStyle);
+}
+
+function applyWeaponStyle(goal: BuildGoalDefinition, weaponStyle: BuildGoalSettings['weaponStyle']): BuildGoalDefinition {
+    const matchMetric: BuildGoalMetric = weaponStyle === 'ranged' ? 'ranged_weapon_match' : 'melee_weapon_match';
+    const damageMetric: BuildGoalMetric = weaponStyle === 'ranged' ? 'ranged_damage_substat' : 'melee_damage_substat';
+    const rules = goal.rules.filter(rule => rule.metric !== 'melee_weapon_match' && rule.metric !== 'ranged_weapon_match');
+    const existingDamage = rules.find(rule => rule.metric === damageMetric);
+    const styledRules = existingDamage
+        ? rules.map(rule => rule === existingDamage ? { ...rule, weight: rule.weight + 2 } : rule)
+        : [...rules, { metric: damageMetric, weight: 2 }];
+    return {
+        ...goal,
+        explanation: `${goal.explanation} The ${weaponStyle} style filter also requires a ${weaponStyle} weapon and favors ${weaponStyle} damage on every swap.`,
+        rules: [{ metric: matchMetric, weight: 5, target: 1, required: true }, ...styledRules],
+    };
 }
 
 export function createCustomBuildGoal(index: number): CustomBuildGoal {

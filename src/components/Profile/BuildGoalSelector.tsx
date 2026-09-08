@@ -23,13 +23,14 @@ export function BuildGoalSelector({ value, onChange, compact = false }: {
     const select = (id: string) => onChange({ ...settings, activeGoalId: id });
     const addCustom = () => {
         const goal = createCustomBuildGoal(settings.customGoals.length + 1);
-        onChange({ activeGoalId: goal.id, customGoals: [...settings.customGoals, goal] });
+        onChange({ ...settings, activeGoalId: goal.id, customGoals: [...settings.customGoals, goal] });
     };
     const updateCustom = (goal: CustomBuildGoal) => onChange({
         ...settings,
         customGoals: settings.customGoals.map(item => item.id === goal.id ? goal : item),
     });
     const deleteCustom = (id: string) => onChange({
+        ...settings,
         activeGoalId: settings.activeGoalId === id ? 'balanced_late_game' : settings.activeGoalId,
         customGoals: settings.customGoals.filter(goal => goal.id !== id),
     });
@@ -53,6 +54,20 @@ export function BuildGoalSelector({ value, onChange, compact = false }: {
                 </button>
             </div>
 
+            <div className="rounded-xl border border-border bg-bg-primary/25 p-3 sm:flex sm:items-center sm:justify-between">
+                <div>
+                    <div className="text-sm font-black text-text-primary">Weapon style</div>
+                    <p className="mt-1 text-xs leading-5 text-text-muted">This combines with every objective below and guides all swap recommendations.</p>
+                </div>
+                <div className="mt-3 grid grid-cols-2 rounded-lg border border-border bg-bg-input p-1 sm:mt-0 sm:min-w-64" role="group" aria-label="Weapon style">
+                    {(['melee', 'ranged'] as const).map(style => (
+                        <button key={style} type="button" aria-pressed={settings.weaponStyle === style} onClick={() => onChange({ ...settings, weaponStyle: style })} className={cn('rounded-md px-4 py-2 text-sm font-bold capitalize transition-colors', settings.weaponStyle === style ? 'bg-accent-primary text-bg-primary shadow' : 'text-text-secondary hover:text-text-primary')}>
+                            {style}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
             <div className={cn('grid gap-2', compact ? 'sm:grid-cols-2 xl:grid-cols-4' : 'sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4')}>
                 {options.map(option => {
                     const selected = settings.activeGoalId === option.id;
@@ -70,6 +85,7 @@ export function BuildGoalSelector({ value, onChange, compact = false }: {
                                 <div className="mt-3 border-t border-border/70 pt-3 text-[11px] leading-5 text-text-secondary">
                                     <p>{option.explanation}</p>
                                     <div className="mt-2 flex flex-wrap gap-1">
+                                        <span className="rounded-full border border-accent-primary/40 px-2 py-0.5 text-[10px] text-accent-primary capitalize">{settings.weaponStyle} style</span>
                                         {option.rules.filter(rule => !rule.ignored).map(rule => <span key={rule.metric} className="rounded-full border border-border px-2 py-0.5 text-[10px] text-text-muted">{BUILD_GOAL_METRICS.find(metric => metric.id === rule.metric)?.label} ×{rule.weight}</span>)}
                                     </div>
                                 </div>
@@ -125,7 +141,7 @@ function CustomGoalEditor({ goal, onChange, onDelete }: { goal: CustomBuildGoal;
                 ))}
             </div>
             <div className="flex flex-col justify-between gap-2 text-[11px] text-text-muted sm:flex-row sm:items-center">
-                <span>Enter displayed percentage targets such as 40 for 40%. Targets create diminishing returns after they are reached; required minimums strongly reject swaps that fall short.</span>
+                <span>Enter displayed percentage targets such as 40 for 40%. A target stops adding value once reached, so swaps can work on the next unfinished goal; required minimums strongly reject swaps that fall short.</span>
                 <button type="button" onClick={addRule} disabled={goal.rules.length >= SUBSTAT_GOAL_METRICS.length} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border px-3 py-2 font-bold text-text-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"><Plus className="h-3.5 w-3.5" /> Add substat</button>
             </div>
         </div>
