@@ -34,13 +34,44 @@ export const BUILD_GOAL_METRICS: { id: BuildGoalMetric; label: string; unit: 'nu
     { id: 'attack_speed', label: 'Attack speed', unit: 'multiplier' },
     { id: 'move_speed', label: 'Move speed', unit: 'percent' },
     { id: 'skill_cooldown', label: 'Skill cooldown reduction', unit: 'percent' },
+    { id: 'melee_weapon_match', label: 'Melee weapon', unit: 'number' },
+    { id: 'ranged_weapon_match', label: 'Ranged weapon', unit: 'number' },
+    { id: 'damage_substat', label: 'Damage', unit: 'percent' },
+    { id: 'health_substat', label: 'Health', unit: 'percent' },
+    { id: 'melee_damage_substat', label: 'Melee damage', unit: 'percent' },
+    { id: 'ranged_damage_substat', label: 'Ranged damage', unit: 'percent' },
+    { id: 'skill_damage_substat', label: 'Skill damage', unit: 'percent' },
+    { id: 'crit_chance_substat', label: 'Critical chance', unit: 'percent' },
+    { id: 'crit_damage_substat', label: 'Critical damage', unit: 'percent' },
+    { id: 'double_chance_substat', label: 'Double chance', unit: 'percent' },
+    { id: 'lifesteal_substat', label: 'Lifesteal', unit: 'percent' },
+    { id: 'health_regen_substat', label: 'Health regeneration', unit: 'percent' },
+    { id: 'block_chance_substat', label: 'Block chance', unit: 'percent' },
+    { id: 'attack_speed_substat', label: 'Attack speed', unit: 'percent' },
+    { id: 'move_speed_substat', label: 'Move speed', unit: 'percent' },
+    { id: 'skill_cooldown_substat', label: 'Skill cooldown', unit: 'percent' },
 ];
+
+export const SUBSTAT_GOAL_METRICS = BUILD_GOAL_METRICS.filter(metric => metric.id.endsWith('_substat'));
+const SUBSTAT_GOAL_IDS = new Set<BuildGoalMetric>(SUBSTAT_GOAL_METRICS.map(metric => metric.id));
 
 const preset = (id: string, name: string, shortDescription: string, explanation: string, rules: BuildGoalRule[]): BuildGoalDefinition => ({
     id, name, shortDescription, explanation, rules,
 });
 
 export const BUILD_GOAL_PRESETS: BuildGoalDefinition[] = [
+    preset('melee_weapon', 'Melee weapon build', 'Favor melee weapons and the substats that make them stronger.', 'Requires a melee weapon when comparing weapons. Swaps are then scored by real damage plus Melee Damage, Attack Speed, Double Chance, Critical Chance, and Lifesteal substats.', [
+        { metric: 'melee_weapon_match', weight: 5, target: 1, required: true }, { metric: 'real_dps', weight: 3 },
+        { metric: 'melee_damage_substat', weight: 2.5 }, { metric: 'attack_speed_substat', weight: 1.5 },
+        { metric: 'double_chance_substat', weight: 1.25 }, { metric: 'crit_chance_substat', weight: 1 },
+        { metric: 'lifesteal_substat', weight: 0.75 },
+    ]),
+    preset('ranged_weapon', 'Ranged weapon build', 'Favor ranged weapons and the substats that make them stronger.', 'Requires a ranged weapon when comparing weapons. Swaps are then scored by real damage plus Ranged Damage, Attack Speed, Critical Chance, Double Chance, and movement substats.', [
+        { metric: 'ranged_weapon_match', weight: 5, target: 1, required: true }, { metric: 'real_dps', weight: 3 },
+        { metric: 'ranged_damage_substat', weight: 2.5 }, { metric: 'attack_speed_substat', weight: 1.5 },
+        { metric: 'crit_chance_substat', weight: 1.25 }, { metric: 'double_chance_substat', weight: 1 },
+        { metric: 'move_speed_substat', weight: 0.75 },
+    ]),
     preset('balanced_late_game', 'Balanced late-game', 'Advance without creating a damage or survival weakness.', 'Uses a weighted blend of real DPS, real healing, total health, lifesteal, attack speed, and block. A swap must improve the combined late-game profile instead of winning on one headline number alone.', [
         { metric: 'real_dps', weight: 3 }, { metric: 'real_hps', weight: 2.5 }, { metric: 'total_health', weight: 2 },
         { metric: 'lifesteal', weight: 1.5 }, { metric: 'attack_speed', weight: 1 }, { metric: 'block_chance', weight: 0.75 },
@@ -82,7 +113,10 @@ export const DEFAULT_BUILD_GOAL_SETTINGS: BuildGoalSettings = {
 export function normalizeBuildGoalSettings(settings?: BuildGoalSettings): BuildGoalSettings {
     return {
         activeGoalId: settings?.activeGoalId || DEFAULT_BUILD_GOAL_SETTINGS.activeGoalId,
-        customGoals: settings?.customGoals || [],
+        customGoals: (settings?.customGoals || []).map(goal => {
+            const rules = goal.rules.filter(rule => SUBSTAT_GOAL_IDS.has(rule.metric));
+            return { ...goal, rules: rules.length ? rules : defaultCustomSubstatRules() };
+        }),
     };
 }
 
@@ -97,13 +131,20 @@ export function createCustomBuildGoal(index: number): CustomBuildGoal {
     return {
         id: `custom_goal_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         name: `Custom goal ${index}`,
-        description: 'My own target values and priorities.',
-        rules: [
-            { metric: 'real_dps', weight: 3 },
-            { metric: 'real_hps', weight: 2 },
-            { metric: 'lifesteal', weight: 1.5 },
-        ],
+        description: 'My own substat targets and priorities.',
+        rules: defaultCustomSubstatRules(),
     };
+}
+
+function defaultCustomSubstatRules(): BuildGoalRule[] {
+    return [
+        { metric: 'damage_substat', weight: 2 },
+        { metric: 'attack_speed_substat', weight: 1.5 },
+        { metric: 'lifesteal_substat', weight: 1.5 },
+        { metric: 'crit_chance_substat', weight: 1 },
+        { metric: 'crit_damage_substat', weight: 1 },
+        { metric: 'double_chance_substat', weight: 1 },
+    ];
 }
 
 export function readBuildGoalMetric(stats: AggregatedStats, metric: BuildGoalMetric, context: BuildGoalContext): number {
@@ -128,6 +169,22 @@ export function readBuildGoalMetric(stats: AggregatedStats, metric: BuildGoalMet
         case 'attack_speed': return stats.attackSpeedMultiplier;
         case 'move_speed': return stats.moveSpeed * 100;
         case 'skill_cooldown': return stats.skillCooldownReduction * 100;
+        case 'melee_weapon_match': return stats.isRangedWeapon ? 0 : 1;
+        case 'ranged_weapon_match': return stats.isRangedWeapon ? 1 : 0;
+        case 'damage_substat': return stats.secondaryDamageMulti * 100;
+        case 'health_substat': return stats.secondaryHealthMulti * 100;
+        case 'melee_damage_substat': return stats.meleeDamageMultiplier * 100;
+        case 'ranged_damage_substat': return stats.rangedDamageMultiplier * 100;
+        case 'skill_damage_substat': return stats.secondarySkillDamageMulti * 100;
+        case 'crit_chance_substat': return stats.secondaryCriticalChance * 100;
+        case 'crit_damage_substat': return stats.secondaryCriticalDamage * 100;
+        case 'double_chance_substat': return stats.secondaryDoubleDamageChance * 100;
+        case 'lifesteal_substat': return stats.secondaryLifeSteal * 100;
+        case 'health_regen_substat': return stats.secondaryHealthRegen * 100;
+        case 'block_chance_substat': return stats.secondaryBlockChance * 100;
+        case 'attack_speed_substat': return stats.secondaryAttackSpeed * 100;
+        case 'move_speed_substat': return stats.secondaryMoveSpeed * 100;
+        case 'skill_cooldown_substat': return stats.secondarySkillCooldownMulti * 100;
     }
 }
 

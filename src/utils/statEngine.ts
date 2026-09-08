@@ -74,6 +74,16 @@ export interface AggregatedStats {
     // Secondary stats (from items/pets/mount - for display)
     secondaryDamageMulti: number;   // DamageMulti secondary stat
     secondaryHealthMulti: number;   // HealthMulti secondary stat
+    secondaryCriticalChance: number;
+    secondaryCriticalDamage: number;
+    secondaryDoubleDamageChance: number;
+    secondaryAttackSpeed: number;
+    secondaryLifeSteal: number;
+    secondaryHealthRegen: number;
+    secondaryBlockChance: number;
+    secondarySkillCooldownMulti: number;
+    secondarySkillDamageMulti: number;
+    secondaryMoveSpeed: number;
     mountedDamage: number;  // For display in UI if needed
     mountedHealth: number;  // For display in UI if needed
     skinDamageMulti: number;        // Skin Damage Multiplier (e.g. 0.10 = +10%)
@@ -198,6 +208,16 @@ export const DEFAULT_STATS: AggregatedStats = {
     healthMultiplier: 1,
     secondaryDamageMulti: 0,
     secondaryHealthMulti: 0,
+    secondaryCriticalChance: 0,
+    secondaryCriticalDamage: 0,
+    secondaryDoubleDamageChance: 0,
+    secondaryAttackSpeed: 0,
+    secondaryLifeSteal: 0,
+    secondaryHealthRegen: 0,
+    secondaryBlockChance: 0,
+    secondarySkillCooldownMulti: 0,
+    secondarySkillDamageMulti: 0,
+    secondaryMoveSpeed: 0,
     mountedDamage: 0,
     mountedHealth: 0,
     skinDamageMulti: 0,
@@ -1783,6 +1803,16 @@ export class StatEngine {
 
         this.stats.secondaryDamageMulti = this.secondaryStats.damageMulti;
         this.stats.secondaryHealthMulti = this.secondaryStats.healthMulti;
+        this.stats.secondaryCriticalChance = this.secondaryStats.criticalChance;
+        this.stats.secondaryCriticalDamage = this.secondaryStats.criticalDamage;
+        this.stats.secondaryDoubleDamageChance = this.secondaryStats.doubleDamageChance;
+        this.stats.secondaryAttackSpeed = this.secondaryStats.attackSpeed;
+        this.stats.secondaryLifeSteal = this.secondaryStats.lifeSteal;
+        this.stats.secondaryHealthRegen = this.secondaryStats.healthRegen;
+        this.stats.secondaryBlockChance = this.secondaryStats.blockChance;
+        this.stats.secondarySkillCooldownMulti = this.secondaryStats.skillCooldownMulti;
+        this.stats.secondarySkillDamageMulti = this.secondaryStats.skillDamageMulti;
+        this.stats.secondaryMoveSpeed = this.secondaryStats.moveSpeed;
         this.stats.mountDamage = this.mountDamage;
         this.stats.mountHealth = this.mountHealth;
         this.stats.mountedDamage = this.mountDamage;

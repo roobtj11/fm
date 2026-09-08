@@ -90,7 +90,15 @@ export type BuildGoalMetric =
     | 'weapon_dps' | 'skill_dps' | 'farm_rate' | 'boss_rate'
     | 'crit_chance' | 'crit_damage' | 'double_chance'
     | 'lifesteal' | 'health_regen' | 'block_chance'
-    | 'attack_speed' | 'move_speed' | 'skill_cooldown';
+    | 'attack_speed' | 'move_speed' | 'skill_cooldown'
+    | 'melee_weapon_match' | 'ranged_weapon_match'
+    | 'damage_substat' | 'health_substat'
+    | 'melee_damage_substat' | 'ranged_damage_substat'
+    | 'skill_damage_substat' | 'crit_chance_substat'
+    | 'crit_damage_substat' | 'double_chance_substat'
+    | 'lifesteal_substat' | 'health_regen_substat'
+    | 'block_chance_substat' | 'attack_speed_substat'
+    | 'move_speed_substat' | 'skill_cooldown_substat';
 
 export interface BuildGoalRule {
     metric: BuildGoalMetric;

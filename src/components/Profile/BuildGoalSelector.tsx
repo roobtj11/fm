@@ -4,6 +4,7 @@ import type { BuildGoalMetric, BuildGoalRule, BuildGoalSettings, CustomBuildGoal
 import {
     BUILD_GOAL_METRICS,
     BUILD_GOAL_PRESETS,
+    SUBSTAT_GOAL_METRICS,
     createCustomBuildGoal,
     normalizeBuildGoalSettings,
     resolveBuildGoal,
@@ -93,7 +94,7 @@ function CustomGoalEditor({ goal, onChange, onDelete }: { goal: CustomBuildGoal;
     });
     const addRule = () => {
         const used = new Set(goal.rules.map(rule => rule.metric));
-        const metric = BUILD_GOAL_METRICS.find(item => !used.has(item.id))?.id || 'real_dps';
+        const metric = SUBSTAT_GOAL_METRICS.find(item => !used.has(item.id))?.id || 'damage_substat';
         onChange({ ...goal, rules: [...goal.rules, { metric, weight: 1 }] });
     };
 
@@ -110,7 +111,7 @@ function CustomGoalEditor({ goal, onChange, onDelete }: { goal: CustomBuildGoal;
             <div className="space-y-2">
                 {goal.rules.map((rule, index) => (
                     <div key={`${rule.metric}-${index}`} className={cn('grid gap-2 rounded-lg border border-border/70 bg-bg-primary/25 p-3 md:grid-cols-[1.4fr_0.65fr_0.8fr_0.8fr_0.8fr_auto]', rule.ignored && 'opacity-55')}>
-                        <label className="space-y-1"><span className="text-[9px] uppercase tracking-wider text-text-muted">Stat</span><select value={rule.metric} onChange={event => updateRule(index, { metric: event.target.value as BuildGoalMetric })} className="w-full rounded-md border border-border bg-bg-input px-2 py-2 text-xs text-text-primary">{BUILD_GOAL_METRICS.map(metric => <option key={metric.id} value={metric.id}>{metric.label}</option>)}</select></label>
+                        <label className="space-y-1"><span className="text-[9px] uppercase tracking-wider text-text-muted">Substat</span><select value={rule.metric} onChange={event => updateRule(index, { metric: event.target.value as BuildGoalMetric })} className="w-full rounded-md border border-border bg-bg-input px-2 py-2 text-xs text-text-primary">{SUBSTAT_GOAL_METRICS.map(metric => <option key={metric.id} value={metric.id}>{metric.label}</option>)}</select></label>
                         <SmallNumber label="Priority" value={rule.weight} min={0} max={5} step={0.25} onChange={weight => updateRule(index, { weight })} />
                         <SmallNumber label="Target" value={rule.target} onChange={target => updateRule(index, { target })} optional />
                         <SmallNumber label="Minimum" value={rule.minimum} onChange={minimum => updateRule(index, { minimum })} optional />
@@ -124,8 +125,8 @@ function CustomGoalEditor({ goal, onChange, onDelete }: { goal: CustomBuildGoal;
                 ))}
             </div>
             <div className="flex flex-col justify-between gap-2 text-[11px] text-text-muted sm:flex-row sm:items-center">
-                <span>Targets create diminishing returns after they are reached. Required thresholds heavily penalize swaps that fall short; maximums penalize going over a cap.</span>
-                <button type="button" onClick={addRule} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border px-3 py-2 font-bold text-text-secondary hover:text-text-primary"><Plus className="h-3.5 w-3.5" /> Add stat rule</button>
+                <span>Enter displayed percentage targets such as 40 for 40%. Targets create diminishing returns after they are reached; required minimums strongly reject swaps that fall short.</span>
+                <button type="button" onClick={addRule} disabled={goal.rules.length >= SUBSTAT_GOAL_METRICS.length} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border px-3 py-2 font-bold text-text-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"><Plus className="h-3.5 w-3.5" /> Add substat</button>
             </div>
         </div>
     );
