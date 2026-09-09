@@ -71,7 +71,7 @@ export interface SkillSlot {
 
 export type SteppingStoneChoice = 'up' | 'down';
 export type SteppingStoneOutcome = 'safe' | 'fall';
-export type SteppingStonePredictionModel = 'balanced_50' | 'balanced_bayesian' | 'best_observed';
+export type SteppingStonePredictionModel = 'balanced_50' | 'balanced_bayesian' | 'best_observed' | 'random';
 export type SteppingStonePredictionScope = 'whole_run' | 'per_stone';
 export type SteppingStoneDataSource = 'my_data' | 'all_users' | 'combined';
 
@@ -88,6 +88,20 @@ export interface SteppingStoneAttempt {
     startedAt: string;
     finishedAt?: string;
     entries: SteppingStoneEntry[];
+    source?: 'mine' | 'community_observed';
+}
+
+export interface SteppingStoneSimulationSummary {
+    generatedAt: string;
+    runs: number;
+    up: { attempts: number; safe: number };
+    down: { attempts: number; safe: number };
+    perStone: Array<{
+        stone: number;
+        up: { attempts: number; safe: number };
+        down: { attempts: number; safe: number };
+    }>;
+    clears: number;
 }
 
 export interface SteppingStonesTracker {
@@ -97,6 +111,7 @@ export interface SteppingStonesTracker {
     predictionModel?: SteppingStonePredictionModel;
     predictionScope?: SteppingStonePredictionScope;
     dataSource?: SteppingStoneDataSource;
+    simulation?: SteppingStoneSimulationSummary;
 }
 
 export type BuildGoalMetric =
@@ -376,6 +391,6 @@ export const INITIAL_PROFILE: UserProfile = {
         scannerContributionEnabled: true,
         pinnedNavigationPaths: [],
         steppingStoneContributionEnabled: true,
-        steppingStones: { attempts: [], targetStones: 10, dataSource: 'all_users' }
+        steppingStones: { attempts: [], targetStones: 8, dataSource: 'all_users' }
     }
 };

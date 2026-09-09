@@ -5,6 +5,7 @@ import {
     ArrowUp,
     BarChart3,
     Cloud,
+    Dices,
     Download,
     Play,
     RotateCcw,
@@ -12,6 +13,7 @@ import {
     Sparkles,
     Square,
     Undo2,
+    Users,
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { useProfile } from '../../context/ProfileContext';
@@ -27,15 +29,16 @@ import type {
 
 const EMPTY_TRACKER: SteppingStonesTracker = {
     attempts: [],
-    targetStones: 10,
+    targetStones: 8,
     predictionModel: 'balanced_bayesian',
     predictionScope: 'per_stone',
 };
 
 const MODEL_OPTIONS: { id: SteppingStonePredictionModel; label: string; description: string }[] = [
-    { id: 'balanced_50', label: 'Balanced 50/50', description: 'Keeps recorded Up and Down choices as even as possible.' },
+    { id: 'balanced_50', label: 'Balanced successful outcomes', description: 'Uses safe-result counts—not alternating turns—to balance successful Up and Down outcomes.' },
     { id: 'balanced_bayesian', label: 'Balanced Bayesian', description: 'Explores evenly while evidence is weak, then follows a meaningful edge.' },
     { id: 'best_observed', label: 'Best observed', description: 'Always favors the strongest smoothed historical result.' },
+    { id: 'random', label: 'Random suggestion', description: 'Makes a fresh 50/50 Up or Down suggestion for each hop.' },
 ];
 
 const SCOPE_OPTIONS: { id: SteppingStonePredictionScope; label: string; description: string }[] = [
@@ -120,13 +123,14 @@ const getDirectionStats = (
 
 export default function SteppingStonesTracker() {
     const { profile, updateNestedProfile, exportProfile } = useProfile();
-    const tracker = profile.misc.steppingStones ?? EMPTY_TRACKER;
+    const storedTracker = profile.misc.steppingStones ?? EMPTY_TRACKER;
+    const tracker = storedTracker.targetStones === 8 ? storedTracker : { ...storedTracker, targetStones: 8 };
     const predictionModel = tracker.predictionModel ?? 'balanced_bayesian';
     const predictionScope = tracker.predictionScope ?? 'per_stone';
     const dataSource = tracker.dataSource ?? 'all_users';
-    const contributionEnabled = profile.misc.steppingStoneContributionEnabled !== false;
     const [choice, setChoice] = useState<SteppingStoneChoice | null>(null);
     const [sharedAggregates, setSharedAggregates] = useState<SharedAggregate[]>([]);
+    const [simulationRuns, setSimulationRuns] = useState(500);
 
     const currentAttempt = tracker.attempts.find(
         attempt => attempt.id === tracker.currentAttemptId,
@@ -150,7 +154,7 @@ export default function SteppingStonesTracker() {
     useEffect(() => { void refreshShared(); }, []);
 
     useEffect(() => {
-        if (!contributionEnabled || !allEntries.length) return;
+        if (!allEntries.length) return;
         const timeout = window.setTimeout(async () => {
             const response = await fetch('/api/shared-stepping-stones', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ entries: allEntries }),
@@ -158,7 +162,7 @@ export default function SteppingStonesTracker() {
             if (response?.ok) void refreshShared();
         }, 900);
         return () => window.clearTimeout(timeout);
-    }, [allEntries, contributionEnabled]);
+    }, [allEntries]);
 
     const stats = useMemo(() => {
         const up = getDirectionStats(allEntries, 'up');
@@ -225,6 +229,15 @@ export default function SteppingStonesTracker() {
         return { total, safe, successRate: rate(safe, total), interval: wilsonInterval(safe, total) };
     };
 
+    const simulatedDirection = (direction: SteppingStoneChoice, stone?: number): DirectionStats => {
+        const source = stone === undefined
+            ? tracker.simulation?.[direction]
+            : tracker.simulation?.perStone?.find(row => row.stone === stone)?.[direction];
+        const total = source?.attempts || 0;
+        const safe = source?.safe || 0;
+        return { total, safe, successRate: rate(safe, total), interval: wilsonInterval(safe, total) };
+    };
+
     const recommendation = useMemo<StoneRecommendation>(() => {
         const stoneStats = stats.perStone[currentStone - 1];
         const upStone = stoneStats?.up ?? getDirectionStats([], 'up');
@@ -234,12 +247,15 @@ export default function SteppingStonesTracker() {
         const communityUp = sharedDirection('up', predictionScope === 'per_stone' ? currentStone : undefined);
         const communityDown = sharedDirection('down', predictionScope === 'per_stone' ? currentStone : undefined);
         const communityHasData = communityUp.total + communityDown.total > 0;
-        const scopeUp = dataSource === 'my_data' || (dataSource === 'all_users' && !communityHasData)
+        const realScopeUp = dataSource === 'my_data' || (dataSource === 'all_users' && !communityHasData)
             ? myUp : dataSource === 'combined' ? combineDirection(myUp, communityUp) : communityUp;
-        const scopeDown = dataSource === 'my_data' || (dataSource === 'all_users' && !communityHasData)
+        const realScopeDown = dataSource === 'my_data' || (dataSource === 'all_users' && !communityHasData)
             ? myDown : dataSource === 'combined' ? combineDirection(myDown, communityDown) : communityDown;
+        const scopeUp = combineDirection(realScopeUp, simulatedDirection('up', predictionScope === 'per_stone' ? currentStone : undefined));
+        const scopeDown = combineDirection(realScopeDown, simulatedDirection('down', predictionScope === 'per_stone' ? currentStone : undefined));
         const scopeSamples = scopeUp.total + scopeDown.total;
-        const populationName = dataSource === 'my_data' ? 'your data' : dataSource === 'combined' ? 'your and community data' : communityHasData ? 'community data' : 'your data (community sample is empty)';
+        const simulationLabel = tracker.simulation ? ' plus your local simulated user' : '';
+        const populationName = (dataSource === 'my_data' ? 'your data' : dataSource === 'combined' ? 'your and community data' : communityHasData ? 'community data' : 'your data (community sample is empty)') + simulationLabel;
         const scopeName = `${predictionScope === 'per_stone' ? `hop ${currentStone}` : 'the whole run'} using ${populationName}`;
 
         // Laplace smoothing prevents one lucky result from becoming a 0%/100% prediction.
@@ -249,21 +265,32 @@ export default function SteppingStonesTracker() {
         const downScore = smoothed(scopeDown);
         const margin = Math.abs(upScore - downScore);
 
-        const alternatingPick = (currentStone + tracker.attempts.length) % 2 === 0 ? 'down' : 'up';
-        const lessUsedInScope = scopeUp.total === scopeDown.total ? alternatingPick : scopeUp.total < scopeDown.total ? 'up' : 'down';
-        const observedLeader = margin < 0.001 ? alternatingPick : upScore > downScore ? 'up' : 'down';
+        const randomPick: SteppingStoneChoice = Math.random() < 0.5 ? 'up' : 'down';
+        const lessUsedInScope = scopeUp.total === scopeDown.total ? randomPick : scopeUp.total < scopeDown.total ? 'up' : 'down';
+        const lessSuccessfulInScope = scopeUp.safe === scopeDown.safe ? (upScore === downScore ? randomPick : upScore > downScore ? 'up' : 'down') : scopeUp.safe < scopeDown.safe ? 'up' : 'down';
+        const observedLeader = margin < 0.001 ? randomPick : upScore > downScore ? 'up' : 'down';
         const strongEvidence = scopeSamples >= 20 && margin >= 0.1;
-        const suggested: SteppingStoneChoice = predictionModel === 'balanced_50'
-            ? lessUsedInScope
+        const suggested: SteppingStoneChoice = predictionModel === 'random'
+            ? randomPick
+            : predictionModel === 'balanced_50'
+            ? lessSuccessfulInScope
             : predictionModel === 'best_observed'
                 ? observedLeader
                 : strongEvidence ? observedLeader : lessUsedInScope;
+
+        if (predictionModel === 'random') {
+            return {
+                choice: suggested,
+                confidence: 'Balanced pick',
+                reason: `This is a true 50/50 random suggestion for ${predictionScope === 'per_stone' ? `hop ${currentStone}` : 'this run'}. It does not use or alter historical evidence.`,
+            };
+        }
 
         if (predictionModel === 'balanced_50') {
             return {
                 choice: suggested,
                 confidence: 'Balanced pick',
-                reason: `This keeps recorded choices close to 50/50 within ${scopeName}. So far this scope has ${scopeUp.total} Up and ${scopeDown.total} Down choices.`,
+                reason: `This balances successful outcomes within ${scopeName}. So far, Up has ${scopeUp.safe} safe results and Down has ${scopeDown.safe}; it does not simply alternate directions.`,
             };
         }
 
@@ -300,15 +327,16 @@ export default function SteppingStonesTracker() {
             confidence: 'Early signal',
             reason: `The sample for ${scopeName} is still small, so treat this as an early signal.`,
         };
-    }, [currentStone, dataSource, predictionModel, predictionScope, sharedAggregates, stats.down, stats.perStone, stats.up, tracker.attempts.length]);
+    }, [currentStone, dataSource, predictionModel, predictionScope, sharedAggregates, stats.down, stats.perStone, stats.up, tracker.simulation]);
 
-    const startAttempt = () => {
+    const startAttempt = (source: SteppingStoneAttempt['source'] = 'mine') => {
         if (currentAttempt) return;
         const now = new Date().toISOString();
         const attempt: SteppingStoneAttempt = {
             id: newId('attempt'),
             startedAt: now,
             entries: [],
+            source,
         };
         saveTracker({
             ...tracker,
@@ -316,6 +344,28 @@ export default function SteppingStonesTracker() {
             currentAttemptId: attempt.id,
         });
         setChoice(null);
+    };
+
+    const simulateRandomRuns = () => {
+        const runs = Math.max(1, Math.min(10_000, Math.round(simulationRuns) || 500));
+        let upAttempts = 0; let upSafe = 0; let downAttempts = 0; let downSafe = 0; let clears = 0;
+        const perStone = Array.from({ length: 8 }, (_, index) => ({ stone: index + 1, up: { attempts: 0, safe: 0 }, down: { attempts: 0, safe: 0 } }));
+        for (let run = 0; run < runs; run += 1) {
+            let cleared = true;
+            for (let stone = 1; stone <= tracker.targetStones; stone += 1) {
+                const direction: SteppingStoneChoice = Math.random() < 0.5 ? 'up' : 'down';
+                const safe = Math.random() < 0.5;
+                if (direction === 'up') { upAttempts += 1; if (safe) upSafe += 1; }
+                else { downAttempts += 1; if (safe) downSafe += 1; }
+                const row = perStone[stone - 1];
+                row[direction].attempts += 1;
+                if (safe) row[direction].safe += 1;
+                if (!safe) { cleared = false; break; }
+            }
+            if (cleared) clears += 1;
+        }
+        saveTracker({ ...tracker, simulation: { generatedAt: new Date().toISOString(), runs, up: { attempts: upAttempts, safe: upSafe }, down: { attempts: downAttempts, safe: downSafe }, perStone, clears } });
+        toast.success(`Simulated ${runs.toLocaleString()} random runs for this profile's calculations.`);
     };
 
     const endAttempt = () => {
@@ -434,6 +484,8 @@ export default function SteppingStonesTracker() {
     const balanceDown = dataSource === 'my_data' || (dataSource === 'all_users' && !hasCommunityBalance) ? myBalanceDown : dataSource === 'combined' ? combineDirection(myBalanceDown, communityBalanceDown) : communityBalanceDown;
     const choiceTotal = balanceUp.total + balanceDown.total;
     const upChoiceShare = choiceTotal ? balanceUp.total / choiceTotal : 0.5;
+    const globalUp = sharedDirection('up');
+    const globalDown = sharedDirection('down');
 
     return (
         <div className="mx-auto w-full max-w-7xl space-y-6 p-3 sm:p-5 lg:p-7">
@@ -470,21 +522,7 @@ export default function SteppingStonesTracker() {
                                     : 'Start an attempt when you reach the first choice.'}
                             </p>
                         </div>
-                        <label className="flex items-center gap-2 text-sm text-slate-300">
-                            Target stones
-                            <input
-                                type="number"
-                                min={1}
-                                max={100}
-                                value={tracker.targetStones}
-                                disabled={Boolean(currentAttempt)}
-                                onChange={event => saveTracker({
-                                    ...tracker,
-                                    targetStones: Math.max(1, Math.min(100, Number(event.target.value) || 1)),
-                                })}
-                                className="w-20 rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-white outline-none focus:border-cyan-400 disabled:opacity-50"
-                            />
-                        </label>
+                        <span className="rounded-full border border-slate-600 bg-slate-950 px-3 py-2 text-sm font-semibold text-slate-300">Fixed run · 8 hops</span>
                     </div>
 
                     <div className="mt-5 rounded-xl border border-slate-700 bg-slate-950/45 p-4">
@@ -492,7 +530,7 @@ export default function SteppingStonesTracker() {
                             <div><h3 className="font-semibold text-white">Prediction model</h3><p className="mt-1 text-xs text-slate-500">You can change this at any time without deleting history.</p></div>
                             <span className="rounded-full border border-cyan-800 bg-cyan-950/50 px-3 py-1 text-xs font-semibold text-cyan-200">Default: Balanced Bayesian</span>
                         </div>
-                        <div className="mt-3 grid gap-2 md:grid-cols-3">
+                        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
                             {MODEL_OPTIONS.map(model => <button key={model.id} type="button" onClick={() => saveTracker({ ...tracker, predictionModel: model.id })} className={`rounded-xl border p-3 text-left transition ${predictionModel === model.id ? 'border-cyan-400 bg-cyan-500/15' : 'border-slate-700 bg-slate-900/60 hover:border-slate-500'}`}><span className={`block text-sm font-bold ${predictionModel === model.id ? 'text-cyan-200' : 'text-white'}`}>{model.label}</span><span className="mt-1 block text-xs leading-5 text-slate-400">{model.description}</span></button>)}
                         </div>
                         <div className="mt-4 border-t border-slate-700 pt-4">
@@ -503,15 +541,7 @@ export default function SteppingStonesTracker() {
                         </div>
                         <div className="mt-4 border-t border-slate-700 pt-4">
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div><h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Prediction data</h4><p className="mt-1 text-xs text-slate-500">Choose whose anonymous results the Up/Down model uses.</p></div>
-                                <label className="flex items-center gap-2 text-xs text-slate-300">
-                                    <input type="checkbox" checked={contributionEnabled} onChange={event => {
-                                        const enabled = event.target.checked;
-                                        updateNestedProfile('misc', { steppingStoneContributionEnabled: enabled });
-                                        if (!enabled) void fetch('/api/shared-stepping-stones', { method: 'DELETE' }).then(() => refreshShared()).catch(() => undefined);
-                                    }} className="accent-cyan-400" />
-                                    Contribute anonymously
-                                </label>
+                                <div><h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Prediction data</h4><p className="mt-1 text-xs text-slate-500">Choose which real results the model uses. Recorded runs are added to the anonymous aggregate automatically.</p></div>
                             </div>
                             <div className="mt-3 grid gap-2 sm:grid-cols-3">
                                 {[
@@ -520,25 +550,32 @@ export default function SteppingStonesTracker() {
                                     ['combined', 'Combined', 'Your history plus the community.'],
                                 ].map(([id, label, description]) => <button key={id} type="button" onClick={() => saveTracker({ ...tracker, dataSource: id as SteppingStonesTracker['dataSource'] })} className={`rounded-xl border p-3 text-left transition ${dataSource === id ? 'border-fuchsia-400 bg-fuchsia-500/10' : 'border-slate-700 bg-slate-900/60 hover:border-slate-500'}`}><span className={`block text-sm font-bold ${dataSource === id ? 'text-fuchsia-200' : 'text-white'}`}>{label}</span><span className="mt-1 block text-xs leading-5 text-slate-400">{description}</span></button>)}
                             </div>
-                            <p className="mt-2 text-[11px] leading-5 text-slate-500">Sharing is on by default. Only stone number, direction, and safe/fall outcome are contributed; your profile and identity are never shown.</p>
+                            <p className="mt-2 text-[11px] leading-5 text-slate-500">Only hop number, direction, and safe/fall outcome are shared. Local simulated-user results affect your calculations but are never uploaded or counted in global statistics.</p>
                         </div>
                         <div className="mt-4">
                             <div className="mb-2 text-xs font-semibold text-slate-400">{predictionScope === 'per_stone' ? `Hop ${currentStone} choice balance` : 'Whole-run choice balance'} · {dataSource === 'my_data' ? 'my data' : dataSource === 'combined' ? 'combined' : hasCommunityBalance ? 'all users' : 'my data fallback'}</div>
                             <div className="flex justify-between text-xs font-semibold"><span className="text-emerald-300">Up {balanceUp.total} · {percent(upChoiceShare)}</span><span className="text-violet-300">Down {balanceDown.total} · {percent(1 - upChoiceShare)}</span></div>
                             <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-slate-800"><div className="bg-emerald-500 transition-all" style={{ width: `${upChoiceShare * 100}%` }} /><div className="flex-1 bg-violet-500" /></div>
-                            <p className="mt-2 text-xs text-slate-500">This balances recorded choices, not successful outcomes. Successes are never intentionally forced to match.</p>
+                            <p className="mt-2 text-xs text-slate-500">Balanced successful outcomes uses safe-result evidence rather than alternating Up and Down. Other models use their descriptions above.</p>
                         </div>
                     </div>
 
+                    <div className="mt-5 rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
+                        <div className="flex items-center gap-2"><Dices className="h-5 w-5 text-violet-300" /><h3 className="font-bold text-white">Local simulated user</h3></div>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">Generate random eight-hop runs to add controlled noise to this profile's suggestion calculation. These runs stay separate from your history and all global statistics.</p>
+                        <div className="mt-3 flex flex-wrap items-end gap-2">
+                            <label className="space-y-1 text-xs text-slate-400"><span className="block">Number of runs</span><input type="number" min={1} max={10000} value={simulationRuns} onChange={event => setSimulationRuns(Math.max(1, Math.min(10000, Number(event.target.value) || 500)))} className="w-32 rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-white" /></label>
+                            <button type="button" onClick={simulateRandomRuns} className="inline-flex items-center gap-2 rounded-lg bg-violet-500 px-4 py-2 text-sm font-bold text-white hover:bg-violet-400"><Dices className="h-4 w-4" />Simulate runs</button>
+                            {tracker.simulation && <button type="button" onClick={() => saveTracker({ ...tracker, simulation: undefined })} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800">Remove simulation</button>}
+                        </div>
+                        {tracker.simulation && <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3"><Stat label="Simulated runs" value={tracker.simulation.runs.toLocaleString()} /><Stat label="Up safe" value={`${tracker.simulation.up.safe}/${tracker.simulation.up.attempts}`} /><Stat label="Down safe" value={`${tracker.simulation.down.safe}/${tracker.simulation.down.attempts}`} /></div>}
+                    </div>
+
                     {!currentAttempt ? (
-                        <button
-                            type="button"
-                            onClick={startAttempt}
-                            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-5 py-4 text-lg font-bold text-slate-950 transition hover:bg-cyan-400"
-                        >
-                            <Play className="h-5 w-5" />
-                            Start new attempt
-                        </button>
+                        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                            <button type="button" onClick={() => startAttempt('mine')} className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-5 py-4 text-lg font-bold text-slate-950 transition hover:bg-cyan-400"><Play className="h-5 w-5" />Start my attempt</button>
+                            <button type="button" onClick={() => startAttempt('community_observed')} className="flex w-full items-center justify-center gap-2 rounded-xl border border-fuchsia-400/50 bg-fuchsia-500/10 px-5 py-4 text-base font-bold text-fuchsia-100 transition hover:bg-fuchsia-500/20"><Users className="h-5 w-5" />Add observed community run</button>
+                        </div>
                     ) : (
                         <>
                             <div className="mt-6 rounded-xl border border-cyan-700/70 bg-cyan-950/35 p-4">
@@ -701,6 +738,15 @@ export default function SteppingStonesTracker() {
                 </section>
             </div>
 
+            <section className="rounded-2xl border border-fuchsia-500/30 bg-fuchsia-950/15 p-4 shadow-lg sm:p-6">
+                <div className="flex items-center gap-2"><Cloud className="h-5 w-5 text-fuchsia-300" /><h2 className="text-xl font-bold text-white">Global stepping-stone statistics</h2></div>
+                <p className="mt-1 text-xs leading-5 text-slate-400">Anonymous observed runs from all users. Your local simulated user is excluded from these totals.</p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {directionCard('Global Up', globalUp, 'text-emerald-300')}
+                    {directionCard('Global Down', globalDown, 'text-violet-300')}
+                </div>
+            </section>
+
             <section className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4 shadow-lg sm:p-6">
                 <div className="flex flex-wrap items-end justify-between gap-3">
                     <div>
@@ -756,7 +802,7 @@ export default function SteppingStonesTracker() {
                             return (
                                 <div key={attempt.id} className="rounded-xl border border-slate-700 bg-slate-950/50 p-4">
                                     <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <span className="font-semibold text-white">Attempt {attemptNumber}</span>
+                                        <span className="font-semibold text-white">Attempt {attemptNumber} <span className="ml-2 rounded-full border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-400">{attempt.source === 'community_observed' ? 'Observed community' : 'Mine'}</span></span>
                                         <span className="text-xs text-slate-500">{formatDate(attempt.startedAt)}</span>
                                     </div>
                                     <div className="mt-3 flex flex-wrap gap-2">

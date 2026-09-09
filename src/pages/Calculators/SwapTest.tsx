@@ -54,6 +54,14 @@ type SwapResult = {
     strategy: 'fast' | 'exact';
     evaluationMode: SwapEvaluationMode;
     projectedItemLevel: number | null;
+    rebuildPotential?: {
+        currentPerfection: number;
+        candidatePerfection: number;
+        currentGoalFit: number;
+        candidateGoalFit: number;
+        currentScore: number;
+        candidateScore: number;
+    };
     goal: BuildGoalDefinition;
     contexts: { current: BuildGoalContext; candidateCurrent: BuildGoalContext; candidateOptimized: BuildGoalContext };
     stage: { difficulty: number; age: number; battle: number; predictionEnabled: boolean };
@@ -161,6 +169,41 @@ function goalsForStyle(settings: BuildGoalSettings | undefined, style: Companion
         customGoals: settings?.customGoals || [],
         weaponStyle: style,
     }));
+}
+
+const REBUILD_STAT_METRICS: Record<string, string[]> = {
+    DamageMulti: ['real_dps', 'power', 'weapon_dps', 'farm_rate', 'boss_rate', 'damage_substat'],
+    HealthMulti: ['real_hps', 'total_health', 'power', 'health_substat'],
+    MeleeDamageMulti: ['real_dps', 'weapon_dps', 'melee_damage_substat'],
+    RangedDamageMulti: ['real_dps', 'weapon_dps', 'ranged_damage_substat'],
+    SkillDamageMulti: ['real_dps', 'skill_dps', 'skill_damage_substat'],
+    CriticalChance: ['real_dps', 'crit_chance', 'crit_chance_substat'],
+    CriticalMulti: ['real_dps', 'crit_damage', 'crit_damage_substat'],
+    DoubleDamageChance: ['real_dps', 'double_chance', 'double_chance_substat'],
+    LifeSteal: ['real_hps', 'lifesteal', 'lifesteal_substat'],
+    HealthRegen: ['real_hps', 'health_regen', 'health_regen_substat'],
+    BlockChance: ['total_health', 'block_chance', 'block_chance_substat'],
+    AttackSpeed: ['real_dps', 'real_hps', 'farm_rate', 'boss_rate', 'attack_speed', 'attack_speed_substat'],
+    MoveSpeed: ['farm_rate', 'move_speed', 'move_speed_substat'],
+    SkillCooldownMulti: ['skill_dps', 'skill_cooldown', 'skill_cooldown_substat'],
+};
+
+function itemRebuildPotential(item: ItemSlot | null, goal: BuildGoalDefinition, secondaryStatLibrary: any) {
+    if (!item) return { perfection: 0, goalFit: 0, score: 0 };
+    const perfection = getPerfection(item, secondaryStatLibrary) ?? 0;
+    let weightedQuality = 0;
+    let relevantWeight = 0;
+    for (const stat of item.secondaryStats || []) {
+        const upper = Number(secondaryStatLibrary?.[stat.statId]?.UpperRange || 0) * 100;
+        if (upper <= 0) continue;
+        const quality = Math.max(0, Math.min(100, stat.value / upper * 100));
+        const metrics = new Set(REBUILD_STAT_METRICS[stat.statId] || []);
+        const weight = goal.rules.reduce((sum, rule) => sum + (!rule.ignored && metrics.has(rule.metric) ? Math.max(0, rule.weight) : 0), 0);
+        weightedQuality += quality * weight;
+        relevantWeight += weight;
+    }
+    const goalFit = relevantWeight > 0 ? weightedQuality / relevantWeight : 0;
+    return { perfection, goalFit, score: perfection * 0.4 + goalFit * 0.6 };
 }
 
 export default function SwapTest() {
@@ -390,12 +433,9 @@ export default function SwapTest() {
         try {
             setCalculationProgress({ percent: 3, label: 'Preparing calculations', detail: 'Reading your current profile and selected item.' });
             await yieldForPaint();
-            const liveBaselineStats = calculateProfileStats(profile);
-            const projectedItemLevel = evaluationMode === 'rebuild'
-                ? Math.max(1, liveBaselineStats.maxItemLevels?.[slot] || currentItem?.level || candidate.level)
-                : null;
-            const projectedCurrentItem = projectedItemLevel && currentItem ? { ...currentItem, level: projectedItemLevel } : currentItem;
-            const projectedCandidate = projectedItemLevel ? { ...candidate, level: projectedItemLevel } : candidate;
+            const projectedItemLevel = null;
+            const projectedCurrentItem = currentItem;
+            const projectedCandidate = candidate;
             const baseProfileWithProjectedItem: UserProfile = {
                 ...profile,
                 items: { ...profile.items, [slot]: projectedCurrentItem },
@@ -453,6 +493,8 @@ export default function SwapTest() {
             const candidateCalculationLoadout = effectiveRespectSavedLevels ? candidateLoadout : normalizeCompanionLevels(candidateLoadout);
             const candidateOptimizedProfile = withCompanions(candidateProfile, candidateCalculationLoadout);
             const candidateOptimizedStats = calculateProfileStats(candidateOptimizedProfile);
+            const currentPotential = itemRebuildPotential(currentItem, activeBuildGoal, secondaryStatLibrary);
+            const candidatePotential = itemRebuildPotential(candidate, activeBuildGoal, secondaryStatLibrary);
 
             let stagePrediction: BattleResult | null = null;
             if (stagePredictionEnabled && battleLibs.mainBattleLibrary) {
@@ -480,6 +522,14 @@ export default function SwapTest() {
                 combinations: (currentBest?.combinations || searchSize(analysisProfile)) + (candidateBest?.combinations || searchSize(candidateProfile)),
                 screened: (currentBest?.screened || 0) + (candidateBest?.screened || 0),
                 strategy: optimizerStrategy, evaluationMode, projectedItemLevel, goal: activeBuildGoal, contexts,
+                rebuildPotential: evaluationMode === 'rebuild' ? {
+                    currentPerfection: currentPotential.perfection,
+                    candidatePerfection: candidatePotential.perfection,
+                    currentGoalFit: currentPotential.goalFit,
+                    candidateGoalFit: candidatePotential.goalFit,
+                    currentScore: currentPotential.score,
+                    candidateScore: candidatePotential.score,
+                } : undefined,
                 stage: { difficulty: stageDifficulty, age: stageAge, battle: stageBattle, predictionEnabled: stagePredictionEnabled },
                 stagePrediction });
             setCalculationProgress({ percent: 100, label: 'Complete', detail: 'Your swap recommendation is ready.' });
@@ -607,6 +657,12 @@ export default function SwapTest() {
 
     const recommendation = useMemo(() => {
         if (!result) return null;
+        if (result.evaluationMode === 'rebuild' && result.rebuildPotential) {
+            const change = result.rebuildPotential.candidateScore - result.rebuildPotential.currentScore;
+            if (change > 1) return { label: 'Better long-term build piece', change, color: 'emerald' };
+            if (change < -1) return { label: 'Current item has better potential', change, color: 'red' };
+            return { label: 'Sidegrade / situational', change, color: 'amber' };
+        }
         const comparison = compareBuildGoal(result.goal, result.current, result.candidateOptimized, result.contexts.candidateOptimized);
         const change = comparison.changePercent;
         if (change > 1) return { label: result.evaluationMode === 'rebuild' ? 'Better long-term build piece' : 'Equip the new item', change, color: 'emerald' };
@@ -723,7 +779,7 @@ export default function SwapTest() {
                         )}
                     >
                         <div className="text-sm font-black text-text-primary">Rebuild potential</div>
-                        <p className="mt-1 text-xs leading-5 text-text-muted">Projects both items to your current maximum item level and normalizes companions to level 1, emphasizing roll quality and long-term goal fit instead of today’s upgrade investment.</p>
+                        <p className="mt-1 text-xs leading-5 text-text-muted">Scores each item's immutable roll quality: 40% overall perfection and 60% fit toward the selected long-term stat goal. Item levels are never changed; companion levels are normalized so their investment does not distort the comparison.</p>
                     </button>
                 </div>
 
@@ -919,11 +975,11 @@ export default function SwapTest() {
                             <div className="text-xs uppercase tracking-wider text-text-muted">{result.goal.name} recommendation</div>
                             <h2 className="text-2xl font-bold text-text-primary mt-1">{recommendation.label}</h2>
                             <p className="text-sm text-text-secondary mt-1">
-                                {recommendation.change >= 0 ? '+' : ''}{recommendation.change.toFixed(2)}% after companion re-optimization.
+                                {recommendation.change >= 0 ? '+' : ''}{recommendation.change.toFixed(2)}{result.evaluationMode === 'rebuild' ? ' potential points (40% perfection · 60% goal fit).' : '% after companion re-optimization.'}
                             </p>
                             <p className="mt-1 text-xs font-bold text-violet-200">
                                 {result.evaluationMode === 'rebuild'
-                                    ? `Rebuild projection · both items at Lv. ${result.projectedItemLevel} · companion levels normalized`
+                                    ? `Rebuild potential · actual item levels preserved · companion levels normalized`
                                     : 'Immediate projection · current saved levels and investment'}
                             </p>
                         </div>
@@ -948,6 +1004,11 @@ export default function SwapTest() {
                         This completed result stays visible while you change goals, stages, or equipment. Press Calculate swap to replace it, or Reset to clear it.
                     </p>
 
+                    {result.rebuildPotential && <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-xl border border-border bg-bg-primary/30 p-4"><div className="text-xs font-black uppercase text-text-muted">Current item potential</div><div className="mt-1 text-2xl font-black text-text-primary">{result.rebuildPotential.currentScore.toFixed(1)}</div><div className="mt-2 text-xs text-text-secondary">{result.rebuildPotential.currentPerfection.toFixed(1)}% perfection · {result.rebuildPotential.currentGoalFit.toFixed(1)}% goal fit</div></div>
+                        <div className="rounded-xl border border-violet-400/30 bg-violet-500/10 p-4"><div className="text-xs font-black uppercase text-violet-200">New item potential</div><div className="mt-1 text-2xl font-black text-text-primary">{result.rebuildPotential.candidateScore.toFixed(1)}</div><div className="mt-2 text-xs text-text-secondary">{result.rebuildPotential.candidatePerfection.toFixed(1)}% perfection · {result.rebuildPotential.candidateGoalFit.toFixed(1)}% goal fit</div></div>
+                    </div>}
+
                     <div className={cn(
                         'rounded-xl border p-4',
                         !result.stage.predictionEnabled
@@ -962,7 +1023,7 @@ export default function SwapTest() {
                                     <Target className="h-4 w-4" /> New-item stage prediction
                                 </div>
                                 <p className="mt-1 text-xs text-text-secondary">
-                                    {result.stage.difficulty === 1 ? 'Hard' : 'Normal'} {result.stage.age + 1}-{result.stage.battle + 1}, with the new item and its best companion loadout{result.evaluationMode === 'rebuild' ? ' at projected rebuild levels' : ''}.
+                                    {result.stage.difficulty === 1 ? 'Hard' : 'Normal'} {result.stage.age + 1}-{result.stage.battle + 1}, with the new item and its best companion loadout{result.evaluationMode === 'rebuild' ? ' using actual item levels and normalized companion levels' : ''}.
                                 </p>
                             </div>
                             {!result.stage.predictionEnabled ? (
@@ -981,9 +1042,9 @@ export default function SwapTest() {
                     </div>
 
                     <div className="grid lg:grid-cols-3 gap-3">
-                        <MetricCard title={result.evaluationMode === 'rebuild' ? 'Current item, projected' : 'Current, optimized'} stats={result.current} baseline={result.current} goal={result.goal} context={result.contexts.current} />
-                        <MetricCard title={result.evaluationMode === 'rebuild' ? 'New item, projected companions' : 'New item, current companions'} stats={result.candidateCurrent} baseline={result.current} goal={result.goal} context={result.contexts.candidateCurrent} />
-                        <MetricCard title={result.evaluationMode === 'rebuild' ? 'New item, projected best build' : 'New item, re-optimized'} stats={result.candidateOptimized} baseline={result.current} goal={result.goal} context={result.contexts.candidateOptimized} highlight />
+                        <MetricCard title={result.evaluationMode === 'rebuild' ? 'Current item, actual level' : 'Current, optimized'} stats={result.current} baseline={result.current} goal={result.goal} context={result.contexts.current} />
+                        <MetricCard title={result.evaluationMode === 'rebuild' ? 'New item, actual level' : 'New item, current companions'} stats={result.candidateCurrent} baseline={result.current} goal={result.goal} context={result.contexts.candidateCurrent} />
+                        <MetricCard title={result.evaluationMode === 'rebuild' ? 'New item, goal companions' : 'New item, re-optimized'} stats={result.candidateOptimized} baseline={result.current} goal={result.goal} context={result.contexts.candidateOptimized} highlight />
                     </div>
 
                     <StatComparison current={result.current} candidateCurrent={result.candidateCurrent} candidateOptimized={result.candidateOptimized} />
