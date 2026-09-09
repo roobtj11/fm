@@ -4,7 +4,7 @@ import { toast } from 'react-toastify';
 import { useProfile } from '../context/ProfileContext';
 import { useGameData } from '../hooks/useGameData';
 import type { ItemSlot, MountSlot, PetSlot, ScannerTrainingExample, ScannerTrainingField } from '../types/Profile';
-import { recognizeImportCardLocally, recognizeRegionsLocally, type OcrRegion } from '../utils/localOcr';
+import { recognizeImportCardLocally, recognizeRegionsLocally, type ImportCardOcrFields, type OcrRegion } from '../utils/localOcr';
 import { getStatName } from '../utils/statNames';
 import { AGES } from '../utils/constants';
 
@@ -80,7 +80,7 @@ const similarity = (left: string, right: string) => {
     return 1 - editDistance(a, b) / Math.max(a.length, b.length);
 };
 
-const bestKnownCandidate = (text: string, candidates: any[], rarity?: string) => {
+const bestKnownCandidate = (text: string, candidates: any[], rarity?: string, minimumScore = 0.68) => {
     const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     const nameLines = lines.flatMap(line => {
         const withoutRarity = line.replace(/\[(?:Common|Rare|Epic|Legendary|Ultimate|Mythic|Quantum)\]/i, '').trim();
@@ -89,12 +89,17 @@ const bestKnownCandidate = (text: string, candidates: any[], rarity?: string) =>
     const pool = rarity ? candidates.filter(candidate => !candidate.rarity || normalize(candidate.rarity) === normalize(rarity)) : candidates;
     let best: { candidate: any; score: number } | null = null;
     for (const candidate of pool.length ? pool : candidates) {
-        for (const line of nameLines) {
+        const lettersOnly = text.replace(/[^a-z]/gi, '');
+        const candidateLength = normalize(candidate.name).length;
+        const suffixes = [candidateLength - 1, candidateLength, candidateLength + 1]
+            .filter(length => length > 1 && lettersOnly.length >= length)
+            .map(length => lettersOnly.slice(-length));
+        for (const line of [...nameLines, ...suffixes]) {
             const score = similarity(line, candidate.name);
             if (!best || score > best.score) best = { candidate, score };
         }
     }
-    return best && best.score >= 0.68 ? best.candidate : undefined;
+    return best && best.score >= minimumScore ? best.candidate : undefined;
 };
 
 const statIdFromOcrLine = (line: string) => {
@@ -125,8 +130,9 @@ const knownCandidates = (spriteMapping: any, autoItemMapping: any) => [
 
 const canonicalizeRecognition = (current: Recognition, spriteMapping: any, autoItemMapping: any): Recognition => {
     const candidates = knownCandidates(spriteMapping, autoItemMapping);
-    const candidate = candidates.find((item: any) => normalize(item.name) === normalize(current.name))
-        || bestKnownCandidate(current.name, candidates);
+    const sameKind = candidates.filter(item => item.kind === current.kind);
+    const candidate = sameKind.find((item: any) => normalize(item.name) === normalize(current.name))
+        || bestKnownCandidate(current.name, sameKind);
     if (!candidate) return current;
     return {
         ...current,
@@ -188,21 +194,43 @@ function applyCorrectionValue(current: Recognition, field: ScannerTrainingField,
     return current;
 }
 
-function parseOcr(text: string, confidence: number, spriteMapping: any, autoItemMapping: any): Recognition {
+const canonicalRarity = (value: string) => {
+    const rarities = ['Common', 'Rare', 'Epic', 'Legendary', 'Ultimate', 'Mythic', 'Quantum'];
+    return rarities.map(rarity => ({ rarity, score: similarity(value, rarity) }))
+        .sort((left, right) => right.score - left.score)[0];
+};
+
+export function parseOcr(text: string, confidence: number, spriteMapping: any, autoItemMapping: any, fields?: ImportCardOcrFields): Recognition {
     const candidates = knownCandidates(spriteMapping, autoItemMapping);
-    const rarityText = text.match(/\b(Common|Rare|Epic|Legendary|Ultimate|Mythic|Quantum)\b/i)?.[1];
-    const compactText = normalize(text);
-    const matched = candidates.find((item: any) => compactText.includes(normalize(item.name)))
-        || bestKnownCandidate(text, candidates, rarityText);
-    const levelText = text.match(/\b(?:lv|level)\.?\s*:?\s*(\d{1,3})\b/i)?.[1];
-    const damageText = text.match(/([\d,.]+\s*[kmb]?)\s*damage\b/i)?.[1];
-    const healthText = text.match(/([\d,.]+\s*[kmb]?)\s*health\b/i)?.[1];
+    const typeText = fields?.type || text;
+    const titleText = fields?.title || text;
+    const levelRegionText = fields?.level || text;
+    const detailsText = fields?.details || text;
+    const headingWords = typeText.split(/[^a-z]+/i).filter(Boolean);
+    const mountHeadingScore = Math.max(0, ...headingWords.map(word => similarity(word, 'Mounts')));
+    const petHeadingScore = Math.max(0, ...headingWords.map(word => similarity(word, 'Pets')));
+    const headingKind: Kind | undefined = /\bmounts?\b/i.test(typeText) || mountHeadingScore >= 0.6 && mountHeadingScore > petHeadingScore
+        ? 'mount'
+        : /\bpets?\b/i.test(typeText) || petHeadingScore >= 0.6 ? 'pet' : undefined;
+    const bracket = titleText.match(/\[\s*([^\]]{2,16})\s*\]\s*([^\r\n]*)/i);
+    const closingBracketName = titleText.match(/\]\s*([^\r\n]+)/)?.[1]?.trim();
+    const rarityGuess = bracket ? canonicalRarity(bracket[1]) : undefined;
+    const rarityText = rarityGuess && rarityGuess.score >= 0.52 ? rarityGuess.rarity : undefined;
+    const nameText = (bracket?.[2] || closingBracketName || titleText).replace(/^[^a-z]+/i, '').trim();
+    const kindPool = headingKind ? candidates.filter(candidate => candidate.kind === headingKind) : candidates;
+    const exact = kindPool.find((item: any) => normalize(nameText) === normalize(item.name));
+    const matched = exact || bestKnownCandidate(nameText, kindPool, rarityText, normalize(nameText).length <= 5 ? 0.58 : 0.64);
+    const levelText = levelRegionText.match(/\b(?:lv|lvl|level)[.\s:]*(\d{1,3})\b/i)?.[1]
+        || levelRegionText.match(/\b(\d{1,3})\b/)?.[1];
+    const damageText = detailsText.match(/([\d,.]+\s*[kmb]?)\s*damage\b/i)?.[1];
+    const healthText = detailsText.match(/([\d,.]+\s*[kmb]?)\s*health\b/i)?.[1];
     const secondaryStats: ImportStat[] = [];
-    for (const line of text.split(/\r?\n/)) {
-        const percent = line.match(/([+-]?\d+(?:[.,]\d+)?)\s*%/)?.[1];
+    for (const line of detailsText.split(/\r?\n/)) {
+        const percent = line.match(/\+\s*(\d+(?:[.,]\d+)?)\s*%/)?.[1];
         if (!percent) continue;
         const statId = statIdFromOcrLine(line);
         const value = Number(percent.replace(',', '.'));
+        if (!statId || !Number.isFinite(value) || value <= 0) continue;
         const sameValueIndex = secondaryStats.findIndex(stat => stat.value === value);
         const isGeneric = (id: string) => id === 'DamageMulti' || id === 'HealthMulti';
         if (sameValueIndex >= 0 && isGeneric(secondaryStats[sameValueIndex].statId) && !isGeneric(statId || '')) {
@@ -212,12 +240,11 @@ function parseOcr(text: string, confidence: number, spriteMapping: any, autoItem
             secondaryStats.push({ statId, value });
         }
     }
-    const bracketName = text.match(/\[(?:Common|Rare|Epic|Legendary|Ultimate|Mythic|Quantum)\]\s*([^\r\n]+)/i)?.[1]?.trim();
     const missing = [!matched && 'name', !levelText && 'level'].filter(Boolean).join(' and ');
     return canonicalizeRecognition({
-        kind: matched?.kind || (/\bmounts?\b/i.test(text) ? 'mount' : /\b(?:weapon|helmet|armou?r|gloves?|belt|necklace|ring|shoes?|item)\b/i.test(text) ? 'item' : 'pet'),
-        name: matched?.name || bracketName || '',
-        rarity: matched?.rarity || (rarityText ? rarityText[0].toUpperCase() + rarityText.slice(1).toLowerCase() : 'Common'),
+        kind: headingKind || matched?.kind || (/\b(?:weapon|helmet|armou?r|gloves?|belt|necklace|ring|shoes?|item)\b/i.test(typeText) ? 'item' : 'pet'),
+        name: matched?.name || '',
+        rarity: rarityText || matched?.rarity || 'Common',
         level: Math.max(1, Number(levelText) || 1),
         slot: matched?.slot,
         age: matched?.age,
@@ -234,8 +261,8 @@ const recognitionFailed = (result: Recognition, expectedStats = 0) => !result.na
 
 export default function CompanionImport() {
     const { profile, updateNestedProfile } = useProfile();
-    const { data: spriteMapping } = useGameData<any>('ManualSpriteMapping.json');
-    const { data: autoItemMapping } = useGameData<any>('AutoItemMapping.json');
+    const { data: spriteMapping, loading: spriteMappingLoading } = useGameData<any>('ManualSpriteMapping.json');
+    const { data: autoItemMapping, loading: autoItemMappingLoading } = useGameData<any>('AutoItemMapping.json');
     const { data: secondaryStatLibrary } = useGameData<any>('SecondaryStatLibrary.json');
     const { data: itemSecondaryUnlock } = useGameData<any>('SecondaryStatItemUnlockLibrary.json');
     const { data: companionSecondaryUnlock } = useGameData<any>('SecondaryStatPetUnlockLibrary.json');
@@ -264,13 +291,13 @@ export default function CompanionImport() {
         if ((ascension || 0) > 0) return 2;
         return Math.max(0, Number(companionSecondaryUnlock?.[candidate.rarity]?.NumberOfSecondStats) || 0);
     };
-    const applicableStatCount = result ? Math.max(expectedStatCount(result), result.secondaryStats.length) : 0;
+    const applicableStatCount = result ? expectedStatCount(result) : 0;
 
     const statIds = useMemo(() => Object.keys(secondaryStatLibrary || {}), [secondaryStatLibrary]);
     const availableNames = useMemo(() => {
         if (!result) return [];
         if (result.kind === 'item') return Object.values(autoItemMapping || {}).map((item: any) => item.ItemName).filter(Boolean).sort();
-        return Object.values((result.kind === 'pet' ? spriteMapping?.pets : spriteMapping?.mounts)?.mapping || {}).map((item: any) => item.name).sort();
+        return [...new Set<string>(Object.values((result.kind === 'pet' ? spriteMapping?.pets : spriteMapping?.mounts)?.mapping || {}).map((item: any) => item.name).filter(Boolean))].sort();
     }, [result, spriteMapping, autoItemMapping]);
     const matches = useMemo(() => {
         if (!result) return [];
@@ -338,6 +365,10 @@ export default function CompanionImport() {
 
     const analyze = async () => {
         if (!imageDataUrl) return;
+        if (spriteMappingLoading || autoItemMappingLoading || !spriteMapping || !autoItemMapping) {
+            setError('Game names are still loading. Wait a moment, then scan again.');
+            return;
+        }
         setBusy(true);
         setError('');
         setProgress(0);
@@ -348,7 +379,7 @@ export default function CompanionImport() {
                 setProgress(Math.round((message.progress || 0) * 100));
                 setProgressLabel(message.status.replace(/_/g, ' '));
             });
-            let parsed = parseOcr(ocr.text, ocr.confidence, spriteMapping, autoItemMapping);
+            let parsed = parseOcr(ocr.text, ocr.confidence, spriteMapping, autoItemMapping, ocr.fields);
             if (recognitionFailed(parsed, expectedStatCount(parsed))) {
                 const sharedResponse = await fetch('/api/scanner-training').catch(() => null);
                 const sharedPayload = sharedResponse?.ok
@@ -367,7 +398,7 @@ export default function CompanionImport() {
                     setProgressLabel('checking learned scan regions');
                     const readings = await recognizeRegionsLocally(imageDataUrl, templates.map(template => template.region), message => setProgress(Math.round((message.progress || 0) * 100)));
                     const trainedText = templates.map((template, index) => `${template.field}: ${readings[index]?.text || ''}`).join('\n');
-                    parsed = parseOcr(`${ocr.text}\n${trainedText}`, Math.max(ocr.confidence, ...readings.map(reading => reading.confidence)), spriteMapping, autoItemMapping);
+                    parsed = parseOcr(`${ocr.text}\n${trainedText}`, Math.max(ocr.confidence, ...readings.map(reading => reading.confidence)), spriteMapping, autoItemMapping, ocr.fields);
                     templates.forEach((template, index) => {
                         const reading = readings[index]?.text;
                         if (!reading) return;
@@ -380,11 +411,22 @@ export default function CompanionImport() {
                             const currentIsSpecific = currentId && currentId !== 'DamageMulti' && currentId !== 'HealthMulti';
                             if (incomingIsGeneric && currentIsSpecific) return;
                         }
+                        if (template.field === 'kind' || template.field === 'rarity') return;
+                        if (template.field === 'name' && parsed.name) return;
+                        if (template.field === 'level' && !parsed.notes?.includes('level')) return;
+                        const statField = indexedStatField(template.field);
+                        if (statField && Number(statField[1]) > expectedStatCount(parsed)) return;
                         parsed = applyCorrectionValue(parsed, template.field, reading);
                     });
                     parsed = canonicalizeRecognition(parsed, spriteMapping, autoItemMapping);
                 }
             }
+            parsed = {
+                ...parsed,
+                secondaryStats: parsed.secondaryStats
+                    .filter(stat => stat.statId && Number.isFinite(stat.value) && stat.value > 0)
+                    .slice(0, expectedStatCount(parsed)),
+            };
             setResult(parsed);
             const failed = recognitionFailed(parsed, expectedStatCount(parsed));
             setScanFailed(failed);
@@ -512,7 +554,7 @@ export default function CompanionImport() {
     };
 
     return <div className="mx-auto max-w-6xl space-y-6 pb-20">
-        <header className="border-b border-border pb-6"><h1 className="flex items-center gap-3 text-3xl font-black text-text-primary"><Camera className="h-8 w-8 text-accent-primary" />Screenshot Import</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">Select up to 100 equipment, pet, or mount screenshots at once. Free local OCR uses a focused detail-card pass plus a full-screen check inside your browser—no AI, tokens, or per-image charge. Review each result; after import, the next image scans automatically.</p></header>
+        <header className="border-b border-border pb-6"><h1 className="flex items-center gap-3 text-3xl font-black text-text-primary"><Camera className="h-8 w-8 text-accent-primary" />Screenshot Import</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">Select up to 100 equipment, pet, or mount screenshots at once. Free local OCR reads the type, bracketed rarity and name, level, and stat areas separately inside your browser—no AI, tokens, or per-image charge. Review each result; after import, the next image scans automatically.</p></header>
         <div className="grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
             <section className="space-y-4 rounded-2xl border border-border bg-bg-card/70 p-5">
                 <label className="flex items-start gap-3 rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-3 text-xs text-text-secondary">
@@ -527,7 +569,7 @@ export default function CompanionImport() {
                     {preview ? <div className="relative w-full"><img src={preview} alt="Screenshot preview" className="max-h-[32rem] w-full object-contain" />{queue.length > 1 && <span className="absolute left-2 top-2 rounded-full bg-black/80 px-3 py-1 text-xs font-black text-white">{queueIndex + 1} of {queue.length} · {queue[queueIndex]?.name}</span>}</div> : <><Upload className="h-10 w-10 text-accent-primary" /><h2 className="mt-3 font-black text-text-primary">Drop screenshots here</h2><p className="mt-1 text-xs text-text-muted">or click to choose up to 100 PNG, JPG, or WEBP files · 10 MB each</p></>}
                 </div>
                 <input ref={fileRef} type="file" multiple accept="image/png,image/jpeg,image/webp" className="hidden" onChange={event => void chooseFiles(event.target.files || undefined)} />
-                <button onClick={analyze} disabled={!imageDataUrl || busy} className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent-primary px-4 py-3 font-black text-white disabled:opacity-40">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}{busy ? `Reading image ${queue.length ? queueIndex + 1 : 1}${progress ? ` · ${progress}%` : '…'}` : queue.length > 1 ? `Start batch of ${queue.length}` : 'Read screenshot locally'}</button>
+                <button onClick={analyze} disabled={!imageDataUrl || busy || spriteMappingLoading || autoItemMappingLoading} className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent-primary px-4 py-3 font-black text-white disabled:opacity-40">{busy || spriteMappingLoading || autoItemMappingLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}{busy ? `Reading image ${queue.length ? queueIndex + 1 : 1}${progress ? ` · ${progress}%` : '…'}` : spriteMappingLoading || autoItemMappingLoading ? 'Loading current game names…' : queue.length > 1 ? `Start batch of ${queue.length}` : 'Read screenshot locally'}</button>
                 {busy && <div className="space-y-1"><div className="h-1.5 overflow-hidden rounded-full bg-black/30"><div className="h-full bg-accent-primary transition-all" style={{ width: `${progress}%` }} /></div><p className="text-center text-[10px] capitalize text-text-muted">{progressLabel || 'Preparing OCR'}</p></div>}
                 <button onClick={startManual} disabled={busy} className="w-full rounded-xl border border-border px-4 py-2.5 text-sm font-bold text-text-secondary hover:border-accent-primary/50 hover:text-text-primary disabled:opacity-40">Enter manually instead</button>
                 {queue.length > 1 && <button onClick={() => finishCurrent(false)} disabled={busy} className="w-full rounded-xl border border-border px-4 py-2.5 text-sm font-bold text-text-muted hover:border-amber-400/50 hover:text-amber-200 disabled:opacity-40">Skip this image · {queue.length - queueIndex - 1} remaining</button>}
@@ -539,7 +581,18 @@ export default function CompanionImport() {
                     <div className="flex items-center justify-between"><div><h2 className="text-xl font-black text-text-primary">{result.kind === 'item' ? 'Equipment details' : 'Companion details'}</h2><p className="text-xs text-text-muted">{result.confidence ? `Local OCR confidence ${Math.round(result.confidence * 100)}%` : 'Manual entry'} · verify every value</p></div>{duplicate && <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-black text-amber-300">Already saved</span>}</div>
                     <div className="grid gap-3 sm:grid-cols-2">
                         <Field label="Type"><select value={result.kind} onChange={e => update({ kind: e.target.value as Kind, name: '' })} className={inputClass}><option value="item">Equipment</option><option value="pet">Pet</option><option value="mount">Mount</option></select></Field>
-                        <Field label="Name"><input list="scan-import-names" value={result.name} onChange={e => update({ name: e.target.value })} className={inputClass} /><datalist id="scan-import-names">{availableNames.map(name => <option key={name} value={name} />)}</datalist></Field>
+                        <Field label="Name"><select value={result.name} onChange={e => {
+                            const name = e.target.value;
+                            if (!name) return update({ name: '' });
+                            if (result.kind === 'item') {
+                                const candidate = Object.values(autoItemMapping || {}).find((item: any) => item.ItemName === name) as any;
+                                return update({ name, slot: slotFromType(candidate?.TypeName) || result.slot, age: candidate?.Age ?? result.age, idx: candidate?.Idx ?? result.idx });
+                            }
+                            const mapping = result.kind === 'pet' ? spriteMapping?.pets?.mapping : spriteMapping?.mounts?.mapping;
+                            const candidates = Object.values(mapping || {}).filter((item: any) => item.name === name) as any[];
+                            const candidate = candidates.find(item => item.rarity === result.rarity) || candidates[0];
+                            update({ name, rarity: candidate?.rarity || result.rarity });
+                        }} className={inputClass}><option value="">Choose a known {result.kind === 'item' ? 'item' : result.kind}</option>{availableNames.map(name => <option key={name} value={name}>{name}</option>)}</select></Field>
                         <Field label="Rarity"><select value={result.rarity} onChange={e => update({ rarity: e.target.value })} className={inputClass}>{['Common','Rare','Epic','Legendary','Ultimate','Mythic','Quantum'].map(value => <option key={value}>{value}</option>)}</select></Field>
                         <Field label="Level"><input type="number" min="1" value={result.level} onChange={e => update({ level: Math.max(1, Number(e.target.value)) })} className={inputClass} /></Field>
                         {result.kind === 'item' && <>

@@ -6,7 +6,7 @@ import { cn } from '../../lib/utils';
 import {
     Star, Egg, Key, Shirt, Cat, Image, ChevronDown,
     Cpu, Swords, Shield, Lock, Coins, Palette, FileJson, HelpCircle, TrendingUp, Hammer, Zap, ShoppingCart, Target, Sliders,
-    Trash2, Check, Copy, Trophy, ArrowRightLeft, LayoutDashboard, Pencil, ScanLine, Sparkles
+    Trash2, Check, Copy, Trophy, ArrowRightLeft, LayoutDashboard, Pencil, ScanLine, Sparkles, Pin, PinOff
 } from 'lucide-react';
 import { GameIcon } from '../UI/GameIcon';
 import { useProfile } from '../../context/ProfileContext';
@@ -43,7 +43,7 @@ const isRecommended = (path: string) => {
 
 export function Sidebar({ isOpen, onClose }: SidebarProps) {
     const location = useLocation();
-    const { profile, profiles, activeProfileId, switchProfile, createProfile, cloneProfile, deleteProfile } = useProfile();
+    const { profile, profiles, activeProfileId, switchProfile, createProfile, cloneProfile, deleteProfile, updateNestedProfile } = useProfile();
     const { selectedVersion } = useGameDataContext();
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({
@@ -124,6 +124,19 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             ]
         }
     ];
+
+    const allItems = NAV_GROUPS.flatMap(group => group.items.map(item => ({ ...item, groupTitle: group.title })));
+    const pinnedPaths = (profile.misc.pinnedNavigationPaths || []).filter(path => allItems.some(item => item.path === path));
+    const pinnedItems = pinnedPaths.flatMap(path => {
+        const item = allItems.find(candidate => candidate.path === path);
+        return item ? [item] : [];
+    });
+    const togglePinned = (path: string) => {
+        const next = pinnedPaths.includes(path)
+            ? pinnedPaths.filter(candidate => candidate !== path)
+            : [...pinnedPaths, path];
+        updateNestedProfile('misc', { pinnedNavigationPaths: next });
+    };
 
     const getThemeInfo = (themeName?: string) => {
         if (!themeName) return null;
@@ -255,6 +268,31 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
 
                 {/* Links */}
                 <div className="flex-1 overflow-y-auto py-6 px-4 space-y-5 custom-scrollbar">
+                    {pinnedItems.length > 0 && (
+                        <div>
+                            <h3 className="mb-2 px-2 text-xs font-bold uppercase tracking-widest text-accent-primary">Pinned</h3>
+                            <div className="space-y-1 rounded-xl border border-accent-primary/15 bg-accent-primary/5 p-1.5">
+                                {pinnedItems.map(item => {
+                                    const Icon = item.icon;
+                                    const isActive = location.pathname === item.path;
+                                    return (
+                                        <div key={`pinned-${item.path}`} className="group relative">
+                                            <Link to={item.path} onClick={onClose} className={cn(
+                                                "flex items-center gap-3 rounded-lg px-3 py-2 pr-10 text-sm font-medium transition-all",
+                                                isActive ? "bg-accent-primary/20 text-accent-primary" : "text-text-primary hover:bg-white/5",
+                                            )}>
+                                                <Icon size={18} />
+                                                <span className="truncate">{item.name}</span>
+                                            </Link>
+                                            <button type="button" onClick={() => togglePinned(item.path)} aria-label={`Unpin ${item.name}`} title={`Unpin ${item.name}`} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-accent-primary hover:bg-black/20">
+                                                <PinOff size={14} />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
                     {NAV_GROUPS.map((group) => {
                         const isCollapsed = collapsedGroups[group.title];
                         const isCollapsible = (group as any).collapsible;
@@ -342,12 +380,12 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                                                 const themeInfo = getThemeInfo((item as any).theme);
 
                                                 return (
+                                                    <div key={item.path} className="group/nav relative">
                                                     <Link
-                                                        key={item.path}
                                                         to={item.path}
-                                                        onClick={() => onClose()}
+                                                        onClick={onClose}
                                                         className={cn(
-                                                            "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 group relative",
+                                                            "flex items-center gap-3 px-3 py-2 pr-10 rounded-lg text-sm font-medium transition-all duration-200 group relative",
                                                             isActive
                                                                 ? "bg-gradient-to-r from-accent-primary/20 to-transparent text-accent-primary border border-accent-primary/20"
                                                                 : recommended
@@ -386,6 +424,19 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                                                                 : <Zap size={12} className="text-accent-primary fill-accent-primary animate-pulse relative z-10" />
                                                         )}
                                                     </Link>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => togglePinned(item.path)}
+                                                        aria-label={`${pinnedPaths.includes(item.path) ? 'Unpin' : 'Pin'} ${item.name}`}
+                                                        title={`${pinnedPaths.includes(item.path) ? 'Unpin' : 'Pin'} ${item.name}`}
+                                                        className={cn(
+                                                            "absolute right-1.5 top-1/2 z-20 -translate-y-1/2 rounded-md p-1.5 transition-all hover:bg-black/20 hover:text-accent-primary focus:opacity-100",
+                                                            pinnedPaths.includes(item.path) ? "text-accent-primary opacity-100" : "text-text-muted opacity-60 sm:opacity-0 sm:group-hover/nav:opacity-100",
+                                                        )}
+                                                    >
+                                                        <Pin size={13} className={pinnedPaths.includes(item.path) ? 'fill-current' : ''} />
+                                                    </button>
+                                                    </div>
                                                 );
                                             })}
                                         </motion.div>

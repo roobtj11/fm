@@ -1,7 +1,11 @@
 export type OcrProgress = { status: string; progress: number };
 
 type TesseractResult = { data: { text: string; confidence: number } };
-type TesseractWorker = { recognize(image: string): Promise<TesseractResult>; terminate(): Promise<void> };
+type TesseractWorker = {
+    recognize(image: string): Promise<TesseractResult>;
+    setParameters(parameters: Record<string, string>): Promise<void>;
+    terminate(): Promise<void>;
+};
 type TesseractApi = { createWorker(language: string, oem?: number, options?: { logger?: (message: OcrProgress) => void }): Promise<TesseractWorker> };
 
 export type OcrRegion = { x: number; y: number; width: number; height: number };
@@ -78,25 +82,49 @@ export const MOBILE_COMPANION_CARD_REGION: OcrRegion = {
     height: 0.19,
 };
 
+export type ImportCardOcrFields = {
+    type: string;
+    title: string;
+    level: string;
+    details: string;
+};
+
+// These regions deliberately separate the dimmed Pets/Mounts heading, the
+// "[Rarity] Name" title, the icon-side level, and the numeric detail lines.
+// Keeping their text apart prevents unrelated screen text from becoming fields.
+export const MOBILE_IMPORT_REGIONS: Record<keyof ImportCardOcrFields, OcrRegion> = {
+    type: { x: 0.16, y: 0.16, width: 0.68, height: 0.10 },
+    title: { x: 0.22, y: 0.285, width: 0.70, height: 0.055 },
+    level: { x: 0.055, y: 0.305, width: 0.22, height: 0.09 },
+    details: { x: 0.20, y: 0.315, width: 0.72, height: 0.12 },
+};
+
 export async function recognizeImportCardLocally(imageDataUrl: string, onProgress: (message: OcrProgress) => void) {
     const tesseract = await loadTesseract();
-    let pass: 'focused' | 'full' = 'focused';
+    const fieldNames = Object.keys(MOBILE_IMPORT_REGIONS) as (keyof ImportCardOcrFields)[];
+    let passIndex = 0;
     const worker = await tesseract.createWorker('eng', 1, {
         logger: message => onProgress({
             ...message,
-            progress: pass === 'focused'
-                ? (message.progress || 0) * 0.55
-                : 0.55 + (message.progress || 0) * 0.45,
+            status: `reading ${fieldNames[passIndex] || 'card'} field`,
+            progress: (passIndex + (message.progress || 0)) / fieldNames.length,
         }),
     });
     try {
-        const focused = await worker.recognize(await preprocess(imageDataUrl, MOBILE_COMPANION_CARD_REGION));
-        pass = 'full';
-        const full = await worker.recognize(await preprocess(imageDataUrl));
-        onProgress({ status: 'combining focused and full scan', progress: 1 });
+        const fields = {} as ImportCardOcrFields;
+        const confidences: number[] = [];
+        for (passIndex = 0; passIndex < fieldNames.length; passIndex += 1) {
+            const field = fieldNames[passIndex];
+            await worker.setParameters({ tessedit_pageseg_mode: field === 'title' || field === 'level' ? '7' : '6' });
+            const response = await worker.recognize(await preprocess(imageDataUrl, MOBILE_IMPORT_REGIONS[field]));
+            fields[field] = response.data.text.trim();
+            confidences.push(response.data.confidence);
+        }
+        onProgress({ status: 'validating known game values', progress: 1 });
         return {
-            text: `${focused.data.text}\n${full.data.text}`.trim(),
-            confidence: Math.max(0, Math.min(1, Math.max(focused.data.confidence, full.data.confidence) / 100)),
+            text: Object.values(fields).join('\n').trim(),
+            fields,
+            confidence: Math.max(0, Math.min(1, Math.max(...confidences) / 100)),
         };
     } finally {
         await worker.terminate();

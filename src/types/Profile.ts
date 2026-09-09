@@ -282,6 +282,8 @@ export interface UserProfile {
         fairy?: FairySettings;
         scannerTrainingExamples?: ScannerTrainingExample[];
         scannerContributionEnabled?: boolean;
+        /** Per-profile sidebar shortcuts, stored in the order they were pinned. */
+        pinnedNavigationPaths?: string[];
         steppingStoneContributionEnabled?: boolean;
         lastManualBackupAt?: string;
     };
@@ -372,6 +374,7 @@ export const INITIAL_PROFILE: UserProfile = {
         fairy: { active: 'Mira', level: 1, useManualSources: false, manualSources: {} },
         scannerTrainingExamples: [],
         scannerContributionEnabled: true,
+        pinnedNavigationPaths: [],
         steppingStoneContributionEnabled: true,
         steppingStones: { attempts: [], targetStones: 10, dataSource: 'all_users' }
     }
