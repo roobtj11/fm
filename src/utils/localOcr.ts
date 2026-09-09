@@ -68,6 +68,41 @@ export async function recognizeLocally(imageDataUrl: string, onProgress: (messag
     }
 }
 
+// Derived from the common portrait pet/mount detail-card screenshots. The focused
+// pass excludes the dimmed inventory and oversized action buttons that otherwise
+// compete with the name, level, base stats, and substats.
+export const MOBILE_COMPANION_CARD_REGION: OcrRegion = {
+    x: 0.055,
+    y: 0.285,
+    width: 0.89,
+    height: 0.19,
+};
+
+export async function recognizeImportCardLocally(imageDataUrl: string, onProgress: (message: OcrProgress) => void) {
+    const tesseract = await loadTesseract();
+    let pass: 'focused' | 'full' = 'focused';
+    const worker = await tesseract.createWorker('eng', 1, {
+        logger: message => onProgress({
+            ...message,
+            progress: pass === 'focused'
+                ? (message.progress || 0) * 0.55
+                : 0.55 + (message.progress || 0) * 0.45,
+        }),
+    });
+    try {
+        const focused = await worker.recognize(await preprocess(imageDataUrl, MOBILE_COMPANION_CARD_REGION));
+        pass = 'full';
+        const full = await worker.recognize(await preprocess(imageDataUrl));
+        onProgress({ status: 'combining focused and full scan', progress: 1 });
+        return {
+            text: `${focused.data.text}\n${full.data.text}`.trim(),
+            confidence: Math.max(0, Math.min(1, Math.max(focused.data.confidence, full.data.confidence) / 100)),
+        };
+    } finally {
+        await worker.terminate();
+    }
+}
+
 export async function recognizeRegionsLocally(imageDataUrl: string, regions: OcrRegion[], onProgress: (message: OcrProgress) => void) {
     if (!regions.length) return [];
     const tesseract = await loadTesseract();

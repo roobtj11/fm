@@ -4,7 +4,7 @@ import { toast } from 'react-toastify';
 import { useProfile } from '../context/ProfileContext';
 import { useGameData } from '../hooks/useGameData';
 import type { ItemSlot, MountSlot, PetSlot, ScannerTrainingExample, ScannerTrainingField } from '../types/Profile';
-import { recognizeLocally, recognizeRegionsLocally, type OcrRegion } from '../utils/localOcr';
+import { recognizeImportCardLocally, recognizeRegionsLocally, type OcrRegion } from '../utils/localOcr';
 import { getStatName } from '../utils/statNames';
 import { AGES } from '../utils/constants';
 
@@ -55,6 +55,59 @@ const statAliases: [string, string][] = [
     ['health regen', 'HealthRegen'], ['lifesteal', 'LifeSteal'], ['life steal', 'LifeSteal'], ['block chance', 'BlockChance'],
     ['health', 'HealthMulti'], ['damage', 'DamageMulti'],
 ];
+
+const editDistance = (left: string, right: string) => {
+    const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+    for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+        const current = [leftIndex];
+        for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+            current[rightIndex] = Math.min(
+                current[rightIndex - 1] + 1,
+                previous[rightIndex] + 1,
+                previous[rightIndex - 1] + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+            );
+        }
+        previous.splice(0, previous.length, ...current);
+    }
+    return previous[right.length];
+};
+
+const similarity = (left: string, right: string) => {
+    const a = normalize(left);
+    const b = normalize(right);
+    if (!a || !b) return 0;
+    if (a.includes(b) || b.includes(a)) return Math.min(a.length, b.length) / Math.max(a.length, b.length);
+    return 1 - editDistance(a, b) / Math.max(a.length, b.length);
+};
+
+const bestKnownCandidate = (text: string, candidates: any[], rarity?: string) => {
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    const nameLines = lines.flatMap(line => {
+        const withoutRarity = line.replace(/\[(?:Common|Rare|Epic|Legendary|Ultimate|Mythic|Quantum)\]/i, '').trim();
+        return [withoutRarity, ...withoutRarity.split(/\s+/)];
+    });
+    const pool = rarity ? candidates.filter(candidate => !candidate.rarity || normalize(candidate.rarity) === normalize(rarity)) : candidates;
+    let best: { candidate: any; score: number } | null = null;
+    for (const candidate of pool.length ? pool : candidates) {
+        for (const line of nameLines) {
+            const score = similarity(line, candidate.name);
+            if (!best || score > best.score) best = { candidate, score };
+        }
+    }
+    return best && best.score >= 0.68 ? best.candidate : undefined;
+};
+
+const statIdFromOcrLine = (line: string) => {
+    const clean = line.toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const exact = statAliases.find(([label]) => clean.includes(label));
+    if (exact) return exact[1];
+    let best: { statId: string; score: number } | null = null;
+    for (const [label, statId] of statAliases) {
+        const score = similarity(clean, label);
+        if (!best || score > best.score) best = { statId, score };
+    }
+    return best && best.score >= 0.68 ? best.statId : undefined;
+};
 
 const slotFromType = (type?: string): EquipmentSlot | undefined => ({
     Weapon: 'Weapon', Helmet: 'Helmet', Armour: 'Body', Gloves: 'Gloves', Belt: 'Belt',
@@ -119,9 +172,10 @@ function parseOcr(text: string, confidence: number, spriteMapping: any, autoItem
             idx: item.Idx,
         })),
     ].sort((a: any, b: any) => normalize(b.name).length - normalize(a.name).length);
-    const compactText = normalize(text);
-    const matched = candidates.find((item: any) => compactText.includes(normalize(item.name)));
     const rarityText = text.match(/\b(Common|Rare|Epic|Legendary|Ultimate|Mythic|Quantum)\b/i)?.[1];
+    const compactText = normalize(text);
+    const matched = candidates.find((item: any) => compactText.includes(normalize(item.name)))
+        || bestKnownCandidate(text, candidates, rarityText);
     const levelText = text.match(/\b(?:lv|level)\.?\s*:?\s*(\d{1,3})\b/i)?.[1];
     const damageText = text.match(/([\d,.]+\s*[kmb]?)\s*damage\b/i)?.[1];
     const healthText = text.match(/([\d,.]+\s*[kmb]?)\s*health\b/i)?.[1];
@@ -129,9 +183,10 @@ function parseOcr(text: string, confidence: number, spriteMapping: any, autoItem
     for (const line of text.split(/\r?\n/)) {
         const percent = line.match(/([+-]?\d+(?:[.,]\d+)?)\s*%/)?.[1];
         if (!percent) continue;
-        const normalizedLine = line.toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ');
-        const alias = statAliases.find(([label]) => normalizedLine.includes(label));
-        if (alias) secondaryStats.push({ statId: alias[1], value: Number(percent.replace(',', '.')) });
+        const statId = statIdFromOcrLine(line);
+        if (statId && !secondaryStats.some(stat => stat.statId === statId && stat.value === Number(percent.replace(',', '.')))) {
+            secondaryStats.push({ statId, value: Number(percent.replace(',', '.')) });
+        }
     }
     const bracketName = text.match(/\[(?:Common|Rare|Epic|Legendary|Ultimate|Mythic|Quantum)\]\s*([^\r\n]+)/i)?.[1]?.trim();
     const missing = [!matched && 'name', !levelText && 'level'].filter(Boolean).join(' and ');
@@ -237,7 +292,7 @@ export default function CompanionImport() {
     };
 
     const chooseFiles = async (files?: FileList | File[]) => {
-        const selected = Array.from(files || []).slice(0, 30);
+        const selected = Array.from(files || []).slice(0, 100);
         if (!selected.length) return;
         setError('');
         setResult(null);
@@ -265,7 +320,7 @@ export default function CompanionImport() {
         setScanFailed(false);
         setCorrections([]);
         try {
-            const ocr = await recognizeLocally(imageDataUrl, message => {
+            const ocr = await recognizeImportCardLocally(imageDataUrl, message => {
                 setProgress(Math.round((message.progress || 0) * 100));
                 setProgressLabel(message.status.replace(/_/g, ' '));
             });
@@ -422,7 +477,7 @@ export default function CompanionImport() {
     };
 
     return <div className="mx-auto max-w-6xl space-y-6 pb-20">
-        <header className="border-b border-border pb-6"><h1 className="flex items-center gap-3 text-3xl font-black text-text-primary"><Camera className="h-8 w-8 text-accent-primary" />Screenshot Import</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">Select up to 30 equipment, pet, or mount screenshots at once. Free local OCR works through the batch inside your browser—no AI, tokens, or per-image charge. Review each result; after import, the next image scans automatically.</p></header>
+        <header className="border-b border-border pb-6"><h1 className="flex items-center gap-3 text-3xl font-black text-text-primary"><Camera className="h-8 w-8 text-accent-primary" />Screenshot Import</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">Select up to 100 equipment, pet, or mount screenshots at once. Free local OCR uses a focused detail-card pass plus a full-screen check inside your browser—no AI, tokens, or per-image charge. Review each result; after import, the next image scans automatically.</p></header>
         <div className="grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
             <section className="space-y-4 rounded-2xl border border-border bg-bg-card/70 p-5">
                 <label className="flex items-start gap-3 rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-3 text-xs text-text-secondary">
