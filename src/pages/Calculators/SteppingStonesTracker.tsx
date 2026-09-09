@@ -350,10 +350,20 @@ export default function SteppingStonesTracker() {
         const runs = Math.max(1, Math.min(10_000, Math.round(simulationRuns) || 500));
         let upAttempts = 0; let upSafe = 0; let downAttempts = 0; let downSafe = 0; let clears = 0;
         const perStone = Array.from({ length: 8 }, (_, index) => ({ stone: index + 1, up: { attempts: 0, safe: 0 }, down: { attempts: 0, safe: 0 } }));
+        // Real people rarely produce a perfectly even sequence. Give each generated batch a
+        // mild temporary lean, let individual runs vary more strongly, and allow short streaks.
+        // The lean is randomly centered around either direction, so repeated simulations do not
+        // permanently favor Up or Down; only the choice pattern becomes less mechanically 50/50.
+        const batchUpChance = 0.42 + (Math.random() * 0.16);
         for (let run = 0; run < runs; run += 1) {
             let cleared = true;
+            const runUpChance = Math.max(0.2, Math.min(0.8, batchUpChance + ((Math.random() - 0.5) * 0.5)));
+            let previousDirection: SteppingStoneChoice | null = null;
             for (let stone = 1; stone <= tracker.targetStones; stone += 1) {
-                const direction: SteppingStoneChoice = Math.random() < 0.5 ? 'up' : 'down';
+                const direction: SteppingStoneChoice = previousDirection && Math.random() < 0.58
+                    ? previousDirection
+                    : Math.random() < runUpChance ? 'up' : 'down';
+                previousDirection = direction;
                 const safe = Math.random() < 0.5;
                 if (direction === 'up') { upAttempts += 1; if (safe) upSafe += 1; }
                 else { downAttempts += 1; if (safe) downSafe += 1; }
@@ -562,13 +572,13 @@ export default function SteppingStonesTracker() {
 
                     <div className="mt-5 rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
                         <div className="flex items-center gap-2"><Dices className="h-5 w-5 text-violet-300" /><h3 className="font-bold text-white">Local simulated user</h3></div>
-                        <p className="mt-1 text-xs leading-5 text-slate-400">Generate random eight-hop runs to add controlled noise to this profile's suggestion calculation. These runs stay separate from your history and all global statistics.</p>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">Generate volatile eight-hop runs with mild directional leans and natural-looking streaks. The safe/fall result stays 50/50, and simulated data remains separate from your history and global statistics.</p>
                         <div className="mt-3 flex flex-wrap items-end gap-2">
                             <label className="space-y-1 text-xs text-slate-400"><span className="block">Number of runs</span><input type="number" min={1} max={10000} value={simulationRuns} onChange={event => setSimulationRuns(Math.max(1, Math.min(10000, Number(event.target.value) || 500)))} className="w-32 rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-white" /></label>
                             <button type="button" onClick={simulateRandomRuns} className="inline-flex items-center gap-2 rounded-lg bg-violet-500 px-4 py-2 text-sm font-bold text-white hover:bg-violet-400"><Dices className="h-4 w-4" />Simulate runs</button>
                             {tracker.simulation && <button type="button" onClick={() => saveTracker({ ...tracker, simulation: undefined })} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800">Remove simulation</button>}
                         </div>
-                        {tracker.simulation && <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3"><Stat label="Simulated runs" value={tracker.simulation.runs.toLocaleString()} /><Stat label="Up safe" value={`${tracker.simulation.up.safe}/${tracker.simulation.up.attempts}`} /><Stat label="Down safe" value={`${tracker.simulation.down.safe}/${tracker.simulation.down.attempts}`} /></div>}
+                        {tracker.simulation && <div className="mt-3 grid gap-2 text-xs sm:grid-cols-4"><Stat label="Simulated runs" value={tracker.simulation.runs.toLocaleString()} /><Stat label="Up choices" value={percent(tracker.simulation.up.attempts / Math.max(1, tracker.simulation.up.attempts + tracker.simulation.down.attempts))} /><Stat label="Up safe" value={`${tracker.simulation.up.safe}/${tracker.simulation.up.attempts}`} /><Stat label="Down safe" value={`${tracker.simulation.down.safe}/${tracker.simulation.down.attempts}`} /></div>}
                     </div>
 
                     {!currentAttempt ? (
