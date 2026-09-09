@@ -39,6 +39,7 @@ import {
 type EquipmentSlot = keyof UserProfile['items'];
 type CompanionLoadout = { pets: PetSlot[]; mount: MountSlot | null };
 type CalculationProgress = { percent: number; label: string; detail: string };
+type SwapEvaluationMode = 'immediate' | 'rebuild';
 
 type SwapResult = {
     slot: EquipmentSlot;
@@ -51,6 +52,8 @@ type SwapResult = {
     combinations: number;
     screened: number;
     strategy: 'fast' | 'exact';
+    evaluationMode: SwapEvaluationMode;
+    projectedItemLevel: number | null;
     goal: BuildGoalDefinition;
     contexts: { current: BuildGoalContext; candidateCurrent: BuildGoalContext; candidateOptimized: BuildGoalContext };
     stage: { difficulty: number; age: number; battle: number; predictionEnabled: boolean };
@@ -141,6 +144,13 @@ function estimatedTimeBetweenKills(stats: AggregatedStats, enemyCount: number, w
     return totalNonCombatTime / Math.max(1, enemyCount);
 }
 
+function normalizeCompanionLevels(loadout: CompanionLoadout): CompanionLoadout {
+    return {
+        pets: loadout.pets.map(pet => ({ ...pet, level: 1 })),
+        mount: loadout.mount ? { ...loadout.mount, level: 1 } : null,
+    };
+}
+
 const companionKey = (entry: TestableCompanion) => entry.instanceId
     || `${entry.id}|${entry.rarity}|${entry.level}|${entry.evolution}|${entry.ascensionLevel || 0}|${JSON.stringify(entry.secondaryStats || [])}`;
 
@@ -202,6 +212,7 @@ export default function SwapTest() {
         [stageAge, stageBattle, stageDifficulty, battleLibs]
     );
     const activeBuildGoal = useMemo(() => resolveBuildGoal(profile.misc.buildGoals), [profile.misc.buildGoals]);
+    const evaluationMode: SwapEvaluationMode = profile.misc.swapEvaluationMode || 'immediate';
 
     const scanSwapScreenshot = async (file?: File) => {
         if (!file) return;
@@ -379,7 +390,21 @@ export default function SwapTest() {
         try {
             setCalculationProgress({ percent: 3, label: 'Preparing calculations', detail: 'Reading your current profile and selected item.' });
             await yieldForPaint();
-            const baselineStats = calculateProfileStats(profile);
+            const liveBaselineStats = calculateProfileStats(profile);
+            const projectedItemLevel = evaluationMode === 'rebuild'
+                ? Math.max(1, liveBaselineStats.maxItemLevels?.[slot] || currentItem?.level || candidate.level)
+                : null;
+            const projectedCurrentItem = projectedItemLevel && currentItem ? { ...currentItem, level: projectedItemLevel } : currentItem;
+            const projectedCandidate = projectedItemLevel ? { ...candidate, level: projectedItemLevel } : candidate;
+            const baseProfileWithProjectedItem: UserProfile = {
+                ...profile,
+                items: { ...profile.items, [slot]: projectedCurrentItem },
+            };
+            const effectiveRespectSavedLevels = evaluationMode === 'immediate' ? respectSavedLevels : false;
+            const analysisProfile = effectiveRespectSavedLevels
+                ? baseProfileWithProjectedItem
+                : withCompanions(baseProfileWithProjectedItem, normalizeCompanionLevels({ pets: profile.pets.active, mount: profile.mount.active }));
+            const baselineStats = calculateProfileStats(analysisProfile);
             const scoreForGoal = (stats: AggregatedStats) => scoreBuildGoal(activeBuildGoal, stats, baselineStats, {
                 enemyHealth,
                 bossHealth,
@@ -388,7 +413,7 @@ export default function SwapTest() {
 
             setCalculationProgress({ percent: 8, label: 'Optimizing current companions', detail: 'Preparing pet and mount combinations.' });
             await yieldForPaint();
-            const currentBest = await optimizeLoadoutAsync('balanced', profile, respectSavedLevels, scoreForGoal, (completed, total, phase) => {
+            const currentBest = await optimizeLoadoutAsync('balanced', analysisProfile, effectiveRespectSavedLevels, scoreForGoal, (completed, total, phase) => {
                 const fraction = completed / Math.max(1, total);
                 setCalculationProgress({
                     percent: 8 + (phase === 'screening' ? fraction * 9 : 9 + fraction * 23),
@@ -399,17 +424,18 @@ export default function SwapTest() {
                 });
             }, optimizerStrategy, profile.misc.buildGoals?.weaponStyle || 'melee');
             const currentLoadout: CompanionLoadout = currentBest || { pets: profile.pets.active, mount: profile.mount.active };
-            const currentOptimizedProfile = withCompanions(profile, currentLoadout);
+            const currentCalculationLoadout = effectiveRespectSavedLevels ? currentLoadout : normalizeCompanionLevels(currentLoadout);
+            const currentOptimizedProfile = withCompanions(analysisProfile, currentCalculationLoadout);
             if (currentBest) applyAutomaticCompanionAssessment(currentBest.screenedPets, currentBest.screenedMounts, baselineStats);
 
-            const candidateProfile: UserProfile = { ...profile, items: { ...profile.items, [slot]: candidate } };
+            const candidateProfile: UserProfile = { ...analysisProfile, items: { ...analysisProfile.items, [slot]: projectedCandidate } };
             setCalculationProgress({ percent: 42, label: 'Calculating the new item', detail: `Applying the new ${slot} to your profile.` });
             await yieldForPaint();
             const candidateCurrentStats = calculateProfileStats(candidateProfile);
 
             setCalculationProgress({ percent: 45, label: 'Optimizing new-item companions', detail: 'Preparing pet and mount combinations.' });
             await yieldForPaint();
-            const candidateBest = await optimizeLoadoutAsync('balanced', candidateProfile, respectSavedLevels, scoreForGoal, (completed, total, phase) => {
+            const candidateBest = await optimizeLoadoutAsync('balanced', candidateProfile, effectiveRespectSavedLevels, scoreForGoal, (completed, total, phase) => {
                 const fraction = completed / Math.max(1, total);
                 setCalculationProgress({
                     percent: 45 + (phase === 'screening' ? fraction * 8 : 8 + fraction * 22),
@@ -424,7 +450,8 @@ export default function SwapTest() {
             setCalculationProgress({ percent: 78, label: 'Building the stat comparison', detail: 'Calculating before, after, and goal-fit changes.' });
             await yieldForPaint();
             const currentStats = calculateProfileStats(currentOptimizedProfile);
-            const candidateOptimizedProfile = withCompanions(candidateProfile, candidateLoadout);
+            const candidateCalculationLoadout = effectiveRespectSavedLevels ? candidateLoadout : normalizeCompanionLevels(candidateLoadout);
+            const candidateOptimizedProfile = withCompanions(candidateProfile, candidateCalculationLoadout);
             const candidateOptimizedStats = calculateProfileStats(candidateOptimizedProfile);
 
             let stagePrediction: BattleResult | null = null;
@@ -450,9 +477,9 @@ export default function SwapTest() {
             };
             setResult({ slot, item: candidate, current: currentStats, candidateCurrent: candidateCurrentStats, candidateOptimized: candidateOptimizedStats,
                 currentLoadout, candidateLoadout,
-                combinations: (currentBest?.combinations || searchSize(profile)) + (candidateBest?.combinations || searchSize(candidateProfile)),
+                combinations: (currentBest?.combinations || searchSize(analysisProfile)) + (candidateBest?.combinations || searchSize(candidateProfile)),
                 screened: (currentBest?.screened || 0) + (candidateBest?.screened || 0),
-                strategy: optimizerStrategy, goal: activeBuildGoal, contexts,
+                strategy: optimizerStrategy, evaluationMode, projectedItemLevel, goal: activeBuildGoal, contexts,
                 stage: { difficulty: stageDifficulty, age: stageAge, battle: stageBattle, predictionEnabled: stagePredictionEnabled },
                 stagePrediction });
             setCalculationProgress({ percent: 100, label: 'Complete', detail: 'Your swap recommendation is ready.' });
@@ -582,8 +609,8 @@ export default function SwapTest() {
         if (!result) return null;
         const comparison = compareBuildGoal(result.goal, result.current, result.candidateOptimized, result.contexts.candidateOptimized);
         const change = comparison.changePercent;
-        if (change > 1) return { label: 'Equip the new item', change, color: 'emerald' };
-        if (change < -1) return { label: 'Keep the current item', change, color: 'red' };
+        if (change > 1) return { label: result.evaluationMode === 'rebuild' ? 'Better long-term build piece' : 'Equip the new item', change, color: 'emerald' };
+        if (change < -1) return { label: result.evaluationMode === 'rebuild' ? 'Current item has better potential' : 'Keep the current item', change, color: 'red' };
         return { label: 'Sidegrade / situational', change, color: 'amber' };
     }, [result]);
 
@@ -672,6 +699,33 @@ export default function SwapTest() {
                         updateNestedProfile('misc', { buildGoals });
                     }}
                 />
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                    <button
+                        type="button"
+                        aria-pressed={evaluationMode === 'immediate'}
+                        onClick={() => updateNestedProfile('misc', { swapEvaluationMode: 'immediate' })}
+                        className={cn(
+                            'rounded-xl border p-4 text-left transition-colors',
+                            evaluationMode === 'immediate' ? 'border-emerald-400/50 bg-emerald-500/10' : 'border-border bg-bg-primary/20 hover:bg-white/5'
+                        )}
+                    >
+                        <div className="text-sm font-black text-text-primary">Immediate results</div>
+                        <p className="mt-1 text-xs leading-5 text-text-muted">Uses current item and companion levels. Choose this when deciding what improves your character and stage odds right now.</p>
+                    </button>
+                    <button
+                        type="button"
+                        aria-pressed={evaluationMode === 'rebuild'}
+                        onClick={() => updateNestedProfile('misc', { swapEvaluationMode: 'rebuild' })}
+                        className={cn(
+                            'rounded-xl border p-4 text-left transition-colors',
+                            evaluationMode === 'rebuild' ? 'border-violet-400/50 bg-violet-500/10' : 'border-border bg-bg-primary/20 hover:bg-white/5'
+                        )}
+                    >
+                        <div className="text-sm font-black text-text-primary">Rebuild potential</div>
+                        <p className="mt-1 text-xs leading-5 text-text-muted">Projects both items to your current maximum item level and normalizes companions to level 1, emphasizing roll quality and long-term goal fit instead of today’s upgrade investment.</p>
+                    </button>
+                </div>
 
                 <div className="rounded-xl border border-border bg-bg-primary/30 p-4 space-y-4">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -809,14 +863,15 @@ export default function SwapTest() {
                 <div className="flex flex-wrap gap-2">
                     <button
                         onClick={() => setRespectSavedLevels(v => !v)}
+                        disabled={evaluationMode === 'rebuild'}
                         className={cn(
-                            'rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                            'rounded-lg border px-3 py-2 text-xs font-medium transition-colors disabled:cursor-default disabled:opacity-50',
                             respectSavedLevels
                                 ? 'bg-accent-primary/15 border-accent-primary/40 text-text-primary'
                                 : 'border-border text-text-secondary'
                         )}
                     >
-                        Companion levels: {respectSavedLevels ? 'Use saved levels' : 'Compare special stats at level 1'}
+                        Companion levels: {evaluationMode === 'rebuild' ? 'Normalized for rebuild' : respectSavedLevels ? 'Use saved levels' : 'Compare special stats at level 1'}
                     </button>
                     <button
                         onClick={() => setOptimizerStrategy(value => value === 'fast' ? 'exact' : 'fast')}
@@ -866,6 +921,11 @@ export default function SwapTest() {
                             <p className="text-sm text-text-secondary mt-1">
                                 {recommendation.change >= 0 ? '+' : ''}{recommendation.change.toFixed(2)}% after companion re-optimization.
                             </p>
+                            <p className="mt-1 text-xs font-bold text-violet-200">
+                                {result.evaluationMode === 'rebuild'
+                                    ? `Rebuild projection · both items at Lv. ${result.projectedItemLevel} · companion levels normalized`
+                                    : 'Immediate projection · current saved levels and investment'}
+                            </p>
                         </div>
                         <div className="flex items-center gap-2">
                             <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs font-bold text-emerald-300">
@@ -902,7 +962,7 @@ export default function SwapTest() {
                                     <Target className="h-4 w-4" /> New-item stage prediction
                                 </div>
                                 <p className="mt-1 text-xs text-text-secondary">
-                                    {result.stage.difficulty === 1 ? 'Hard' : 'Normal'} {result.stage.age + 1}-{result.stage.battle + 1}, with the new item and its best companion loadout.
+                                    {result.stage.difficulty === 1 ? 'Hard' : 'Normal'} {result.stage.age + 1}-{result.stage.battle + 1}, with the new item and its best companion loadout{result.evaluationMode === 'rebuild' ? ' at projected rebuild levels' : ''}.
                                 </p>
                             </div>
                             {!result.stage.predictionEnabled ? (
@@ -921,9 +981,9 @@ export default function SwapTest() {
                     </div>
 
                     <div className="grid lg:grid-cols-3 gap-3">
-                        <MetricCard title="Current, optimized" stats={result.current} baseline={result.current} goal={result.goal} context={result.contexts.current} />
-                        <MetricCard title="New item, current companions" stats={result.candidateCurrent} baseline={result.current} goal={result.goal} context={result.contexts.candidateCurrent} />
-                        <MetricCard title="New item, re-optimized" stats={result.candidateOptimized} baseline={result.current} goal={result.goal} context={result.contexts.candidateOptimized} highlight />
+                        <MetricCard title={result.evaluationMode === 'rebuild' ? 'Current item, projected' : 'Current, optimized'} stats={result.current} baseline={result.current} goal={result.goal} context={result.contexts.current} />
+                        <MetricCard title={result.evaluationMode === 'rebuild' ? 'New item, projected companions' : 'New item, current companions'} stats={result.candidateCurrent} baseline={result.current} goal={result.goal} context={result.contexts.candidateCurrent} />
+                        <MetricCard title={result.evaluationMode === 'rebuild' ? 'New item, projected best build' : 'New item, re-optimized'} stats={result.candidateOptimized} baseline={result.current} goal={result.goal} context={result.contexts.candidateOptimized} highlight />
                     </div>
 
                     <StatComparison current={result.current} candidateCurrent={result.candidateCurrent} candidateOptimized={result.candidateOptimized} />

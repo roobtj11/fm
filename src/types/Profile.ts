@@ -277,6 +277,7 @@ export interface UserProfile {
             battle: number;
             difficulty: number;
         };
+        swapEvaluationMode?: 'immediate' | 'rebuild';
         buildGoals?: BuildGoalSettings;
         fairy?: FairySettings;
         scannerTrainingExamples?: ScannerTrainingExample[];
@@ -366,6 +367,7 @@ export const INITIAL_PROFILE: UserProfile = {
         techPlanMetadata: { isAuto: false },
         useSkinWindup: true,
         swapCalculatorStage: { age: 0, battle: 0, difficulty: 0 },
+        swapEvaluationMode: 'immediate',
         buildGoals: { activeGoalId: 'balanced_late_game', customGoals: [], weaponStyle: 'melee' },
         fairy: { active: 'Mira', level: 1, useManualSources: false, manualSources: {} },
         scannerTrainingExamples: [],
