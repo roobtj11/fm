@@ -17,6 +17,7 @@ interface AccountUser {
     id: string;
     email?: string;
     displayName?: string;
+    isOwner?: boolean;
 }
 
 interface AccountState {

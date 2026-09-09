@@ -6,12 +6,13 @@ import { cn } from '../../lib/utils';
 import {
     Star, Egg, Key, Shirt, Cat, Image, ChevronDown,
     Cpu, Swords, Shield, Lock, Coins, Palette, FileJson, HelpCircle, TrendingUp, Hammer, Zap, ShoppingCart, Target, Sliders,
-    Trash2, Check, Copy, Trophy, ArrowRightLeft, LayoutDashboard, Pencil, ScanLine, Sparkles, Pin, PinOff
+    Trash2, Check, Copy, Trophy, ArrowRightLeft, LayoutDashboard, Pencil, ScanLine, Sparkles, Pin, PinOff, ScanSearch
 } from 'lucide-react';
 import { GameIcon } from '../UI/GameIcon';
 import { useProfile } from '../../context/ProfileContext';
 import { ProfileIcon } from '../Profile/ProfileHeaderPanel';
 import { useGameDataContext } from '../../context/GameDataContext';
+import { useCloudSync } from '../../context/CloudSyncContext';
 
 interface SidebarProps {
     isOpen: boolean;
@@ -45,6 +46,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
     const location = useLocation();
     const { profile, profiles, activeProfileId, switchProfile, createProfile, cloneProfile, deleteProfile, updateNestedProfile } = useProfile();
     const { selectedVersion } = useGameDataContext();
+    const { user } = useCloudSync();
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({
         'Calculators': true,
@@ -68,6 +70,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                 { name: 'My Mounts', path: '/my-mounts', icon: Star },
                 { name: 'Fairies', path: '/fairies', icon: Sparkles },
                 { name: 'Screenshot Import', path: '/import-companions', icon: ScanLine },
+                { name: 'OCR Training Review', path: '/ocr-training-review', icon: ScanSearch, ownerOnly: true },
                 { name: 'Account & Sync', path: '/account', icon: Shield },
                 { name: 'Progress Prediction', path: '/progress-prediction', icon: TrendingUp },
                 { name: 'Mission Calculator', path: '/solo-mission', icon: Target },
@@ -125,7 +128,8 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
         }
     ];
 
-    const allItems = NAV_GROUPS.flatMap(group => group.items.map(item => ({ ...item, groupTitle: group.title })));
+    const visibleNavGroups = NAV_GROUPS.map(group => ({ ...group, items: group.items.filter(item => !('ownerOnly' in item) || !item.ownerOnly || user?.isOwner) }));
+    const allItems = visibleNavGroups.flatMap(group => group.items.map(item => ({ ...item, groupTitle: group.title })));
     const pinnedPaths = (profile.misc.pinnedNavigationPaths || []).filter(path => allItems.some(item => item.path === path));
     const pinnedItems = pinnedPaths.flatMap(path => {
         const item = allItems.find(candidate => candidate.path === path);
@@ -293,7 +297,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                             </div>
                         </div>
                     )}
-                    {NAV_GROUPS.map((group) => {
+                    {visibleNavGroups.map((group) => {
                         const isCollapsed = collapsedGroups[group.title];
                         const isCollapsible = (group as any).collapsible;
 

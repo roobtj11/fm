@@ -179,6 +179,9 @@ export interface ScannerTrainingExample {
     observedText?: string;
     correctedValue: string;
     createdAt: string;
+    trustWeight?: number;
+    reviewStatus?: 'pending' | 'approved' | 'rejected';
+    isMine?: boolean;
 }
 
 export interface UserProfile {

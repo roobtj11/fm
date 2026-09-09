@@ -200,6 +200,23 @@ const canonicalRarity = (value: string) => {
         .sort((left, right) => right.score - left.score)[0];
 };
 
+const correctionTextSimilarity = (observed: string, current: string) => {
+    const left = normalize(observed);
+    const right = normalize(current);
+    if (!left || !right) return 0;
+    if (left.includes(right) || right.includes(left)) return Math.max(0.82, Math.min(left.length, right.length) / Math.max(left.length, right.length));
+    const words = current.split(/\s+/).filter(Boolean);
+    return Math.max(similarity(observed, current), ...words.map(word => similarity(observed, word)));
+};
+
+const correctionSourceText = (field: ScannerTrainingField, fields: ImportCardOcrFields, fallback: string) => {
+    if (field === 'kind') return fields.type;
+    if (field === 'name' || field === 'rarity' || field === 'slot' || field === 'age') return fields.title;
+    if (field === 'level') return fields.level;
+    if (field.startsWith('stat_') || field === 'stat_name' || field === 'stat_value') return fields.details;
+    return fallback;
+};
+
 export function parseOcr(text: string, confidence: number, spriteMapping: any, autoItemMapping: any, fields?: ImportCardOcrFields): Recognition {
     const candidates = knownCandidates(spriteMapping, autoItemMapping);
     const typeText = fields?.type || text;
@@ -380,46 +397,37 @@ export default function CompanionImport() {
                 setProgressLabel(message.status.replace(/_/g, ' '));
             });
             let parsed = parseOcr(ocr.text, ocr.confidence, spriteMapping, autoItemMapping, ocr.fields);
-            if (recognitionFailed(parsed, expectedStatCount(parsed))) {
-                const sharedResponse = await fetch('/api/scanner-training').catch(() => null);
-                const sharedPayload = sharedResponse?.ok
-                    ? await sharedResponse.json().catch(() => null) as { examples?: Array<Omit<ScannerTrainingExample, 'id' | 'createdAt' | 'region'> & { regionJson?: string }> } | null
-                    : null;
-                const sharedTemplates: ScannerTrainingExample[] = (sharedPayload?.examples || []).flatMap((example, index) => {
-                    try {
-                        const region = JSON.parse(example.regionJson || '') as OcrRegion;
-                        return [{ ...example, id: `shared-${index}`, createdAt: '', region } as ScannerTrainingExample];
-                    } catch { return []; }
-                });
-                const templates = [...(profile.misc.scannerTrainingExamples || []), ...sharedTemplates]
-                    .filter(example => Math.abs(example.aspectRatio - aspectRatio) < 0.18)
-                    .slice(0, 80);
-                if (templates.length) {
-                    setProgressLabel('checking learned scan regions');
-                    const readings = await recognizeRegionsLocally(imageDataUrl, templates.map(template => template.region), message => setProgress(Math.round((message.progress || 0) * 100)));
-                    const trainedText = templates.map((template, index) => `${template.field}: ${readings[index]?.text || ''}`).join('\n');
-                    parsed = parseOcr(`${ocr.text}\n${trainedText}`, Math.max(ocr.confidence, ...readings.map(reading => reading.confidence)), spriteMapping, autoItemMapping, ocr.fields);
-                    templates.forEach((template, index) => {
-                        const reading = readings[index]?.text;
-                        if (!reading) return;
-                        const indexed = indexedStatField(template.field);
-                        if (indexed?.[2] === 'name') {
-                            const statIndex = Math.max(0, Number(indexed[1]) - 1);
-                            const currentId = parsed.secondaryStats[statIndex]?.statId;
-                            const incomingId = statIdFromText(reading);
-                            const incomingIsGeneric = incomingId === 'DamageMulti' || incomingId === 'HealthMulti';
-                            const currentIsSpecific = currentId && currentId !== 'DamageMulti' && currentId !== 'HealthMulti';
-                            if (incomingIsGeneric && currentIsSpecific) return;
-                        }
-                        if (template.field === 'kind' || template.field === 'rarity') return;
-                        if (template.field === 'name' && parsed.name) return;
-                        if (template.field === 'level' && !parsed.notes?.includes('level')) return;
-                        const statField = indexedStatField(template.field);
-                        if (statField && Number(statField[1]) > expectedStatCount(parsed)) return;
-                        parsed = applyCorrectionValue(parsed, template.field, reading);
-                    });
-                    parsed = canonicalizeRecognition(parsed, spriteMapping, autoItemMapping);
+            const sharedResponse = await fetch('/api/scanner-training').catch(() => null);
+            const sharedPayload = sharedResponse?.ok
+                ? await sharedResponse.json().catch(() => null) as { examples?: Array<Omit<ScannerTrainingExample, 'id' | 'region'> & { regionJson?: string }> } | null
+                : null;
+            const sharedTemplates: ScannerTrainingExample[] = (sharedPayload?.examples || []).flatMap((example, index) => {
+                try {
+                    const region = JSON.parse(example.regionJson || '') as OcrRegion;
+                    return [{ ...example, id: `shared-${index}`, region } as ScannerTrainingExample];
+                } catch { return []; }
+            });
+            const templates = [
+                ...(profile.misc.scannerTrainingExamples || []).map(example => ({ ...example, trustWeight: 10, isMine: true })),
+                ...sharedTemplates,
+            ].filter(example => example.reviewStatus !== 'rejected' && Math.abs(example.aspectRatio - aspectRatio) < 0.18 && example.observedText);
+            if (templates.length) {
+                setProgressLabel('applying reviewed corrections');
+                const bestByField = new Map<ScannerTrainingField, { template: ScannerTrainingExample; rank: number; match: number }>();
+                for (const template of templates) {
+                    const source = correctionSourceText(template.field, ocr.fields, ocr.text);
+                    const match = Math.max(correctionTextSimilarity(template.observedText || '', source), correctionTextSimilarity(template.observedText || '', ocr.text));
+                    if (match < 0.62) continue;
+                    const rank = match + Math.log2(Math.max(1, template.trustWeight || (template.isMine ? 10 : 1))) * 0.08;
+                    const current = bestByField.get(template.field);
+                    if (!current || rank > current.rank) bestByField.set(template.field, { template, rank, match });
                 }
+                for (const { template } of bestByField.values()) {
+                    const statField = indexedStatField(template.field);
+                    if (statField && Number(statField[1]) > expectedStatCount(parsed)) continue;
+                    parsed = applyCorrectionValue(parsed, template.field, template.correctedValue);
+                }
+                parsed = canonicalizeRecognition(parsed, spriteMapping, autoItemMapping);
             }
             parsed = {
                 ...parsed,
@@ -478,44 +486,38 @@ export default function CompanionImport() {
         return { ...current, secondaryStats: stats };
     });
 
-    const addCorrection = (correction: DraftCorrection) => {
+    const addCorrection = async (correction: DraftCorrection) => {
         setCorrections(current => [...current, correction]);
         setResult(current => current ? applyCorrectionValue(current, correction.field, correction.correctedValue) : current);
+        if (!result || !imageDataUrl) return;
+        let observedText: string | undefined;
+        try {
+            const [reading] = await recognizeRegionsLocally(imageDataUrl, [correction.region], message => {
+                setProgress(Math.round((message.progress || 0) * 100));
+                setProgressLabel('saving correction');
+            });
+            observedText = reading?.text || undefined;
+        } catch {
+            // The manual correction still applies now; matching needs observed OCR text.
+        }
+        const example: ScannerTrainingExample = {
+            id: makeId(), kind: result.kind, field: correction.field, region: correction.region,
+            aspectRatio, observedText, correctedValue: correction.correctedValue,
+            createdAt: new Date().toISOString(), trustWeight: 10, isMine: true,
+        };
+        updateNestedProfile('misc', {
+            scannerTrainingExamples: [...(profile.misc.scannerTrainingExamples || []), example].slice(-100),
+        });
+        if (profile.misc.scannerContributionEnabled !== false) {
+            void fetch('/api/scanner-training', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ examples: [example] }),
+            }).catch(() => undefined);
+        }
     };
 
     const save = async () => {
         if (!result || !selectedMatch || duplicate) return;
         setBusy(true);
-        let trainingExamples: ScannerTrainingExample[] = [];
-        if (corrections.length && imageDataUrl) {
-            let readings: { text: string }[] = [];
-            try {
-                readings = await recognizeRegionsLocally(imageDataUrl, corrections.map(correction => correction.region), message => {
-                    setProgress(Math.round((message.progress || 0) * 100));
-                    setProgressLabel('saving corrected scan examples');
-                });
-            } catch {
-                // Corrections still work as layout training even when the crop OCR cannot be repeated.
-            }
-            trainingExamples = corrections.map((correction, index) => ({
-                id: makeId(),
-                kind: result.kind,
-                field: correction.field,
-                region: correction.region,
-                aspectRatio,
-                observedText: readings[index]?.text || undefined,
-                correctedValue: correction.correctedValue,
-                createdAt: new Date().toISOString(),
-            }));
-            updateNestedProfile('misc', {
-                scannerTrainingExamples: [...(profile.misc.scannerTrainingExamples || []), ...trainingExamples].slice(-100),
-            });
-            if (profile.misc.scannerContributionEnabled !== false) {
-                void fetch('/api/scanner-training', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ examples: trainingExamples }),
-                }).catch(() => undefined);
-            }
-        }
         if (result.kind === 'item') {
             const slot = slotFromType(selectedMatch.TypeName) || result.slot;
             if (!slot) {
