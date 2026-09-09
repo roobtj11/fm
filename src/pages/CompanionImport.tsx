@@ -109,6 +109,36 @@ const statIdFromOcrLine = (line: string) => {
     return best && best.score >= 0.68 ? best.statId : undefined;
 };
 
+const knownCandidates = (spriteMapping: any, autoItemMapping: any) => [
+    ...Object.values(spriteMapping?.pets?.mapping || {}).map((item: any) => ({ ...item, kind: 'pet' as Kind })),
+    ...Object.values(spriteMapping?.mounts?.mapping || {}).map((item: any) => ({ ...item, kind: 'mount' as Kind })),
+    ...Object.values(autoItemMapping || {}).map((item: any) => ({
+        ...item,
+        name: item.ItemName,
+        rarity: AGES[item.Age] || 'Common',
+        kind: 'item' as Kind,
+        slot: slotFromType(item.TypeName),
+        age: item.Age,
+        idx: item.Idx,
+    })),
+].sort((a: any, b: any) => normalize(b.name).length - normalize(a.name).length);
+
+const canonicalizeRecognition = (current: Recognition, spriteMapping: any, autoItemMapping: any): Recognition => {
+    const candidates = knownCandidates(spriteMapping, autoItemMapping);
+    const candidate = candidates.find((item: any) => normalize(item.name) === normalize(current.name))
+        || bestKnownCandidate(current.name, candidates);
+    if (!candidate) return current;
+    return {
+        ...current,
+        kind: candidate.kind,
+        name: candidate.name,
+        rarity: candidate.kind === 'item' ? current.rarity : candidate.rarity,
+        slot: candidate.slot ?? current.slot,
+        age: candidate.age ?? current.age,
+        idx: candidate.idx ?? current.idx,
+    };
+};
+
 const slotFromType = (type?: string): EquipmentSlot | undefined => ({
     Weapon: 'Weapon', Helmet: 'Helmet', Armour: 'Body', Gloves: 'Gloves', Belt: 'Belt',
     Necklace: 'Necklace', Ring: 'Ring', Shoes: 'Shoe',
@@ -159,19 +189,7 @@ function applyCorrectionValue(current: Recognition, field: ScannerTrainingField,
 }
 
 function parseOcr(text: string, confidence: number, spriteMapping: any, autoItemMapping: any): Recognition {
-    const candidates = [
-        ...Object.values(spriteMapping?.pets?.mapping || {}).map((item: any) => ({ ...item, kind: 'pet' as Kind })),
-        ...Object.values(spriteMapping?.mounts?.mapping || {}).map((item: any) => ({ ...item, kind: 'mount' as Kind })),
-        ...Object.values(autoItemMapping || {}).map((item: any) => ({
-            ...item,
-            name: item.ItemName,
-            rarity: AGES[item.Age] || 'Common',
-            kind: 'item' as Kind,
-            slot: slotFromType(item.TypeName),
-            age: item.Age,
-            idx: item.Idx,
-        })),
-    ].sort((a: any, b: any) => normalize(b.name).length - normalize(a.name).length);
+    const candidates = knownCandidates(spriteMapping, autoItemMapping);
     const rarityText = text.match(/\b(Common|Rare|Epic|Legendary|Ultimate|Mythic|Quantum)\b/i)?.[1];
     const compactText = normalize(text);
     const matched = candidates.find((item: any) => compactText.includes(normalize(item.name)))
@@ -184,13 +202,19 @@ function parseOcr(text: string, confidence: number, spriteMapping: any, autoItem
         const percent = line.match(/([+-]?\d+(?:[.,]\d+)?)\s*%/)?.[1];
         if (!percent) continue;
         const statId = statIdFromOcrLine(line);
-        if (statId && !secondaryStats.some(stat => stat.statId === statId && stat.value === Number(percent.replace(',', '.')))) {
-            secondaryStats.push({ statId, value: Number(percent.replace(',', '.')) });
+        const value = Number(percent.replace(',', '.'));
+        const sameValueIndex = secondaryStats.findIndex(stat => stat.value === value);
+        const isGeneric = (id: string) => id === 'DamageMulti' || id === 'HealthMulti';
+        if (sameValueIndex >= 0 && isGeneric(secondaryStats[sameValueIndex].statId) && !isGeneric(statId || '')) {
+            secondaryStats[sameValueIndex] = { statId: statId!, value };
+        } else if (statId && !(sameValueIndex >= 0 && !isGeneric(secondaryStats[sameValueIndex].statId) && isGeneric(statId))
+            && !secondaryStats.some(stat => stat.statId === statId && stat.value === value)) {
+            secondaryStats.push({ statId, value });
         }
     }
     const bracketName = text.match(/\[(?:Common|Rare|Epic|Legendary|Ultimate|Mythic|Quantum)\]\s*([^\r\n]+)/i)?.[1]?.trim();
     const missing = [!matched && 'name', !levelText && 'level'].filter(Boolean).join(' and ');
-    return {
+    return canonicalizeRecognition({
         kind: matched?.kind || (/\bmounts?\b/i.test(text) ? 'mount' : /\b(?:weapon|helmet|armou?r|gloves?|belt|necklace|ring|shoes?|item)\b/i.test(text) ? 'item' : 'pet'),
         name: matched?.name || bracketName || '',
         rarity: matched?.rarity || (rarityText ? rarityText[0].toUpperCase() + rarityText.slice(1).toLowerCase() : 'Common'),
@@ -201,7 +225,7 @@ function parseOcr(text: string, confidence: number, spriteMapping: any, autoItem
         damage: parseMagnitude(damageText), health: parseMagnitude(healthText), secondaryStats,
         confidence,
         notes: missing ? `Local OCR could not confidently find the ${missing}. Enter it manually below.` : 'Read locally in your browser. Verify the values before importing.',
-    };
+    }, spriteMapping, autoItemMapping);
 }
 
 const recognitionFailed = (result: Recognition, expectedStats = 0) => !result.name || result.confidence === undefined || result.confidence < 0.35
@@ -346,8 +370,19 @@ export default function CompanionImport() {
                     parsed = parseOcr(`${ocr.text}\n${trainedText}`, Math.max(ocr.confidence, ...readings.map(reading => reading.confidence)), spriteMapping, autoItemMapping);
                     templates.forEach((template, index) => {
                         const reading = readings[index]?.text;
-                        if (reading) parsed = applyCorrectionValue(parsed, template.field, reading);
+                        if (!reading) return;
+                        const indexed = indexedStatField(template.field);
+                        if (indexed?.[2] === 'name') {
+                            const statIndex = Math.max(0, Number(indexed[1]) - 1);
+                            const currentId = parsed.secondaryStats[statIndex]?.statId;
+                            const incomingId = statIdFromText(reading);
+                            const incomingIsGeneric = incomingId === 'DamageMulti' || incomingId === 'HealthMulti';
+                            const currentIsSpecific = currentId && currentId !== 'DamageMulti' && currentId !== 'HealthMulti';
+                            if (incomingIsGeneric && currentIsSpecific) return;
+                        }
+                        parsed = applyCorrectionValue(parsed, template.field, reading);
                     });
+                    parsed = canonicalizeRecognition(parsed, spriteMapping, autoItemMapping);
                 }
             }
             setResult(parsed);
