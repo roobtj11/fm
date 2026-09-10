@@ -80,6 +80,19 @@ const similarity = (left: string, right: string) => {
     return 1 - editDistance(a, b) / Math.max(a.length, b.length);
 };
 
+const bestWindowSimilarity = (text: string, candidate: string) => {
+    const source = normalize(text);
+    const target = normalize(candidate);
+    if (!source || !target) return 0;
+    let best = similarity(source, target);
+    for (let length = Math.max(2, target.length - 2); length <= target.length + 2; length += 1) {
+        for (let start = 0; start + length <= source.length; start += 1) {
+            best = Math.max(best, similarity(source.slice(start, start + length), target));
+        }
+    }
+    return best;
+};
+
 const bestKnownCandidate = (text: string, candidates: any[], rarity?: string, minimumScore = 0.68) => {
     const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     const nameLines = lines.flatMap(line => {
@@ -95,7 +108,7 @@ const bestKnownCandidate = (text: string, candidates: any[], rarity?: string, mi
             .filter(length => length > 1 && lettersOnly.length >= length)
             .map(length => lettersOnly.slice(-length));
         for (const line of [...nameLines, ...suffixes]) {
-            const score = similarity(line, candidate.name);
+            const score = bestWindowSimilarity(line, candidate.name);
             if (!best || score > best.score) best = { candidate, score };
         }
     }
@@ -220,7 +233,7 @@ const correctionSourceText = (field: ScannerTrainingField, fields: ImportCardOcr
 export function parseOcr(text: string, confidence: number, spriteMapping: any, autoItemMapping: any, fields?: ImportCardOcrFields): Recognition {
     const candidates = knownCandidates(spriteMapping, autoItemMapping);
     const typeText = fields?.type || text;
-    const titleText = fields?.title || text;
+    const titleText = fields ? `${fields.title}\n${fields.details}` : text;
     const levelRegionText = fields?.level || text;
     const detailsText = fields?.details || text;
     const headingWords = typeText.split(/[^a-z]+/i).filter(Boolean);
@@ -231,23 +244,25 @@ export function parseOcr(text: string, confidence: number, spriteMapping: any, a
         : /\bpets?\b/i.test(typeText) || petHeadingScore >= 0.6 ? 'pet' : undefined;
     const bracket = titleText.match(/\[\s*([^\]]{2,16})\s*\]\s*([^\r\n]*)/i);
     const closingBracketName = titleText.match(/\]\s*([^\r\n]+)/)?.[1]?.trim();
-    const rarityGuess = bracket ? canonicalRarity(bracket[1]) : undefined;
+    const rarityGuess = bracket ? canonicalRarity(bracket[1]) : ['Common', 'Rare', 'Epic', 'Legendary', 'Ultimate', 'Mythic', 'Quantum']
+        .map(rarity => ({ rarity, score: bestWindowSimilarity(titleText, rarity) }))
+        .sort((left, right) => right.score - left.score)[0];
     const rarityText = rarityGuess && rarityGuess.score >= 0.52 ? rarityGuess.rarity : undefined;
     const nameText = (bracket?.[2] || closingBracketName || titleText).replace(/^[^a-z]+/i, '').trim();
     const kindPool = headingKind ? candidates.filter(candidate => candidate.kind === headingKind) : candidates;
     const exact = kindPool.find((item: any) => normalize(nameText) === normalize(item.name));
     const matched = exact || bestKnownCandidate(nameText, kindPool, rarityText, normalize(nameText).length <= 5 ? 0.58 : 0.64);
     const levelText = levelRegionText.match(/\b(?:lv|lvl|level)[.\s:]*(\d{1,3})\b/i)?.[1]
-        || levelRegionText.match(/\b(\d{1,3})\b/)?.[1];
+        || fields?.details.match(/\b(?:lv|lvl|level)[.\s:]*(\d{1,3})\b/i)?.[1];
     const damageText = detailsText.match(/([\d,.]+\s*[kmb]?)\s*damage\b/i)?.[1];
     const healthText = detailsText.match(/([\d,.]+\s*[kmb]?)\s*health\b/i)?.[1];
     const secondaryStats: ImportStat[] = [];
     for (const line of detailsText.split(/\r?\n/)) {
-        const percent = line.match(/\+\s*(\d+(?:[.,]\d+)?)\s*%/)?.[1];
+        const percent = line.match(/([+-])\s*(\d+(?:[.,]\d+)?)\s*%/);
         if (!percent) continue;
         const statId = statIdFromOcrLine(line);
-        const value = Number(percent.replace(',', '.'));
-        if (!statId || !Number.isFinite(value) || value <= 0) continue;
+        const value = Number(percent[2].replace(',', '.')) * (percent[1] === '-' ? -1 : 1);
+        if (!statId || !Number.isFinite(value) || value === 0) continue;
         const sameValueIndex = secondaryStats.findIndex(stat => stat.value === value);
         const isGeneric = (id: string) => id === 'DamageMulti' || id === 'HealthMulti';
         if (sameValueIndex >= 0 && isGeneric(secondaryStats[sameValueIndex].statId) && !isGeneric(statId || '')) {
@@ -432,7 +447,7 @@ export default function CompanionImport() {
             parsed = {
                 ...parsed,
                 secondaryStats: parsed.secondaryStats
-                    .filter(stat => stat.statId && Number.isFinite(stat.value) && stat.value > 0)
+                    .filter(stat => stat.statId && Number.isFinite(stat.value) && stat.value !== 0)
                     .slice(0, expectedStatCount(parsed)),
             };
             setResult(parsed);
